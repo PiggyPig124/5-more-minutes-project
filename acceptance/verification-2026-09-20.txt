@@ -1,0 +1,37 @@
+Foundation acceptance evidence
+Run date: 2026-09-20 (Asia/Shanghai)
+
+Live HTTP run
+-------------
+Command: .venv\Scripts\python.exe acceptance\foundation_api_acceptance.py --base-url http://127.0.0.1:8012
+Server: local FastAPI/uvicorn process, fresh SQLite database, deterministic demo adapter
+Result: 85 passed, 0 failed (final primary-reviewer run)
+
+Covered by the 85 assertions: health and bearer authentication, valid/invalid
+credentials and token rejection, unique elder/caregiver accounts, private
+conversation isolation after linking, wrong-account invitation rejection,
+pending invitation revoke/replay rejection, combined emotion plus explicit
+task preview with an emotional acknowledgement, no-action clock-time memory, task absence before confirmation,
+owner-only confirmation, simultaneous confirmation, retry idempotency, one
+task per action, linked task visibility, immediate sharing revoke, owner task
+retention, and conversation reload persistence. It also sent one message twice
+with the same client message id and verified that the same user/assistant turns
+were returned and history stayed at two messages.
+The final run also checks valid login identity, care_tasks scopes, exclusion
+from the linked caregiver's conversation list, and two remembered-future
+or narrative statements that must not produce actions.
+
+Process restart run
+-------------------
+Command: .venv\Scripts\python.exe acceptance\process_restart_acceptance.py
+Server: two locally launched API processes using one temporary SQLite database
+and one generated signing secret; fixture cleanup is owned by the runner
+Result: 29 passed, 0 failed
+
+Covered by the 29 assertions: old token validity after restart, re-login,
+conversation and rolling-context reload, bounded recent context (<= 12
+entries), persisted marker recall by the deterministic adapter, and pending
+action persistence after restart.
+
+The evidence contains no bearer tokens, private message bodies, signing
+secrets, or temporary database paths. It records black-box HTTP behavior only.

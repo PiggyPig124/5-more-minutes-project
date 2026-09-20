@@ -1,0 +1,30 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: anxin
+      POSTGRES_USER: anxin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - anxin_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anxin -d anxin"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://anxin:${POSTGRES_PASSWORD}@db:5432/anxin
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
+      MODEL_NAME: ${MODEL_NAME:-gpt-4o-mini}
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  anxin_db:
