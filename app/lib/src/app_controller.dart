@@ -21,12 +21,24 @@ class AppController extends ChangeNotifier {
   List<CareTask> tasks = const [];
   List<FamilyInvitation> invitations = const [];
   List<FamilyInvitation> links = const [];
+  List<MemoryRecord> memories = const [];
+  List<MemoryRecord> memorySearchResults = const [];
+  String? memoryRetrievalMode;
+  List<StoryRecord> stories = const [];
+  List<ResourceItem> resourceItems = const [];
+  List<ResourceConflict> resourceConflicts = const [];
+  String? resourceRetrievalMode;
+  List<FamilyMessage> familyMessages = const [];
   final Map<String, String> drafts = {};
   final List<ActionProposal> pendingActions = [];
   final Set<String> sendingConversationIds = <String>{};
   final Set<String> loadingConversationIds = <String>{};
   final Set<String> updatingTaskIds = <String>{};
   final Set<String> updatingActionIds = <String>{};
+  final Set<String> updatingMemoryIds = <String>{};
+  final Set<String> updatingStoryIds = <String>{};
+  final Set<String> _sendingFamilyMessageKeys = <String>{};
+  final Map<String, String> _familyMessageClientIds = <String, String>{};
   final Map<String, String> _messageClientIds = <String, String>{};
   final Map<String, String> _draftClientIds = <String, String>{};
   final Map<String, String> _actionClientIds = <String, String>{};
@@ -37,6 +49,37 @@ class AppController extends ChangeNotifier {
   AppUser? get user => session?.user;
   bool get isElder => user?.role == UserRole.elder;
   bool get isCaregiver => user?.role == UserRole.caregiver;
+
+  bool get _canUseFamilyMessages => links.any(
+        (link) =>
+            link.status == InvitationStatus.accepted && link.allowsFamilyMessages,
+      );
+
+  /// Active links with the family_messages grant are the only valid message
+  /// recipients. The UI uses this list for its picker and the controller
+  /// checks the id again before sending.
+  List<FamilyInvitation> get familyMessageLinks => links
+      .where(
+        (link) =>
+            link.status == InvitationStatus.accepted && link.allowsFamilyMessages,
+      )
+      .toList(growable: false);
+
+  String? recipientIdFor(FamilyInvitation link) {
+    if (!_canUseFamilyMessages ||
+        link.status != InvitationStatus.accepted ||
+        !link.allowsFamilyMessages) {
+      return null;
+    }
+    return isElder ? link.caregiverId : link.elderId;
+  }
+
+  String familyCounterpartLabel(FamilyInvitation link) {
+    final roleName = isElder ? link.caregiverName : link.elderName;
+    final value = (roleName ?? link.name)?.trim();
+    if (value != null && value.isNotEmpty) return value;
+    return link.email.isNotEmpty ? link.email : '家庭成員';
+  }
 
   Future<void> initialize() {
     return _initialization ??= _initialize();
@@ -180,9 +223,19 @@ class AppController extends ChangeNotifier {
       tasks = const [];
       invitations = const [];
       links = const [];
+      memories = const [];
+      memorySearchResults = const [];
+      memoryRetrievalMode = null;
+      stories = const [];
+      resourceItems = const [];
+      resourceConflicts = const [];
+      resourceRetrievalMode = null;
+      familyMessages = const [];
       pendingActions.clear();
       drafts.clear();
       _draftClientIds.clear();
+      _familyMessageClientIds.clear();
+      _sendingFamilyMessageKeys.clear();
       _syncToken();
       loading = false;
       notifyListeners();
@@ -199,7 +252,7 @@ class AppController extends ChangeNotifier {
     }
     final errors = <String>[];
     try {
-      final results = await Future.wait<Object?>([
+      final foundation = await Future.wait<Object?>([
         api.listTasks().catchError((Object error) {
           errors.add(_messageFor(error));
           return <CareTask>[];
@@ -219,17 +272,55 @@ class AppController extends ChangeNotifier {
           }),
       ]);
       if (generation != _sessionGeneration || session == null) return;
-      if (results.isNotEmpty) tasks = results[0] as List<CareTask>;
-      if (results.length > 1) invitations = results[1] as List<FamilyInvitation>;
-      if (results.length > 2) links = results[2] as List<FamilyInvitation>;
-      if (isElder && results.length > 3) {
-        conversations = results[3] as List<Conversation>;
+      tasks = foundation[0] as List<CareTask>;
+      invitations = foundation[1] as List<FamilyInvitation>;
+      links = foundation[2] as List<FamilyInvitation>;
+      if (isElder && foundation.length > 3) {
+        conversations = foundation[3] as List<Conversation>;
         await _restorePendingActions(conversations, generation);
+        if (generation != _sessionGeneration || session == null) return;
       } else if (isCaregiver) {
         conversations = const [];
         pendingActions.clear();
       }
+
+      // Personal memories and stories belong to the elder account. A
+      // caregiver never requests these endpoints, even when linked.
+      final personal = isElder
+          ? await Future.wait<Object?>([
+              api.listMemories().catchError((Object error) {
+                errors.add(_messageFor(error));
+                return <MemoryRecord>[];
+              }),
+              api.listStories().catchError((Object error) {
+                errors.add(_messageFor(error));
+                return <StoryRecord>[];
+              }),
+            ])
+          : const <Object?>[];
+      if (generation != _sessionGeneration || session == null) return;
+      if (isElder && personal.length == 2) {
+        memories = personal[0] as List<MemoryRecord>;
+        stories = personal[1] as List<StoryRecord>;
+      } else if (isCaregiver) {
+        memories = const [];
+        stories = const [];
+      }
+
+      // The family-message endpoint is scope protected. Only call it after
+      // the active links have been loaded and an explicit family_messages
+      // grant exists, avoiding noisy 403s for ordinary care-task links.
+      if (_canUseFamilyMessages) {
+        try {
+          familyMessages = await api.listFamilyMessages();
+        } on Object catch (error) {
+          errors.add(_messageFor(error));
+        }
+      } else {
+        familyMessages = const [];
+      }
       if (errors.isNotEmpty) errorMessage = errors.first;
+      notifyListeners();
     } finally {
       if (!silent) {
         loading = false;
@@ -388,6 +479,19 @@ class AppController extends ChangeNotifier {
           !pendingActions.any((action) => action.id == result.action!.id)) {
         pendingActions.add(result.action!);
       }
+      // An explicit "記住" request can create a server-side candidate. The
+      // candidate remains unconfirmed; refreshing it here only makes the
+      // review card available immediately after the chat response.
+      if (assistantMessage?.candidateMemoryId != null) {
+        try {
+          final refreshedMemories = await api.listMemories();
+          if (generation == _sessionGeneration && session != null) {
+            memories = refreshedMemories;
+          }
+        } on ApiException {
+          // The chat send already succeeded. The memory screen can retry.
+        }
+      }
       _messageClientIds.remove(key);
       await sessionStore.clearDraft(conversationId, userId: user?.id);
       await sessionStore.clearDraftClientId(conversationId, userId: user?.id);
@@ -485,14 +589,23 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<bool> createInvitation(String email) async {
+  Future<bool> createInvitation(
+    String email, {
+    bool includeFamilyMessages = false,
+  }) async {
     if (email.trim().isEmpty) return false;
     loading = true;
     final generation = _sessionGeneration;
     errorMessage = null;
     notifyListeners();
     try {
-      final invitation = await api.createInvitation(email: email.trim());
+      final invitation = await api.createInvitation(
+        email: email.trim(),
+        scopes: [
+          'care_tasks',
+          if (includeFamilyMessages) 'family_messages',
+        ],
+      );
       if (generation != _sessionGeneration || session == null) return false;
       invitations = [invitation, ...invitations];
       notifyListeners();
@@ -559,6 +672,12 @@ class AppController extends ChangeNotifier {
               status: InvitationStatus.revoked,
               name: item.name,
               createdAt: item.createdAt,
+              token: item.token,
+              scopes: item.scopes,
+              elderId: item.elderId,
+              caregiverId: item.caregiverId,
+              elderName: item.elderName,
+              caregiverName: item.caregiverName,
             )
           else
             item,
@@ -571,6 +690,392 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshMemories({bool silent = false}) async {
+    if (!isElder) return;
+    final generation = _sessionGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await api.listMemories();
+      if (generation != _sessionGeneration || session == null) return;
+      memories = loaded;
+      memorySearchResults = const [];
+      memoryRetrievalMode = null;
+      notifyListeners();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<MemorySearchResult?> searchMemories(String query) async {
+    if (!isElder || query.trim().isEmpty) return null;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final result = await api.searchMemories(query: query.trim());
+      if (generation != _sessionGeneration || session == null) return null;
+      memorySearchResults = result.items;
+      memoryRetrievalMode = result.retrievalMode;
+      notifyListeners();
+      return result;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<bool> createMemory({
+    required String content,
+    String kind = 'experience',
+    String? sourceMessageId,
+  }) async {
+    if (!isElder || content.trim().isEmpty) return false;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final created = await api.createMemory(
+        content: content.trim(),
+        kind: kind,
+        sourceMessageId: sourceMessageId,
+      );
+      if (generation != _sessionGeneration || session == null) return false;
+      memories = [created, ...memories.where((memory) => memory.id != created.id)];
+      memorySearchResults = [
+        for (final memory in memorySearchResults)
+          if (memory.id != created.id) memory,
+      ];
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> confirmMemory(MemoryRecord memory) async {
+    if (!isElder || updatingMemoryIds.contains(memory.id)) return false;
+    return _runMemoryUpdate(
+      memory.id,
+      () => api.confirmMemory(memory.id),
+    );
+  }
+
+  Future<bool> editMemory(MemoryRecord memory, String content) async {
+    final trimmed = content.trim();
+    if (!isElder || trimmed.isEmpty || updatingMemoryIds.contains(memory.id)) {
+      return false;
+    }
+    return _runMemoryUpdate(
+      memory.id,
+      () => api.updateMemory(memory.id, content: trimmed),
+    );
+  }
+
+  Future<bool> suppressMemory(MemoryRecord memory) async {
+    if (!isElder || updatingMemoryIds.contains(memory.id)) return false;
+    return _runMemoryUpdate(
+      memory.id,
+      () => api.updateMemory(memory.id, suppressed: true),
+    );
+  }
+
+  Future<bool> restoreMemory(MemoryRecord memory) async {
+    if (!isElder || updatingMemoryIds.contains(memory.id)) return false;
+    return _runMemoryUpdate(
+      memory.id,
+      () => api.updateMemory(memory.id, suppressed: false),
+    );
+  }
+
+  Future<bool> deleteMemory(MemoryRecord memory) async {
+    if (!isElder || updatingMemoryIds.contains(memory.id)) return false;
+    final generation = _sessionGeneration;
+    updatingMemoryIds.add(memory.id);
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await api.deleteMemory(memory.id);
+      if (generation != _sessionGeneration || session == null) return false;
+      memories = [for (final item in memories) if (item.id != memory.id) item];
+      memorySearchResults = [
+        for (final item in memorySearchResults)
+          if (item.id != memory.id) item,
+      ];
+      stories = [
+        for (final story in stories)
+          if (!story.memoryIds.contains(memory.id)) story,
+      ];
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } finally {
+      updatingMemoryIds.remove(memory.id);
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _runMemoryUpdate(
+    String memoryId,
+    Future<MemoryRecord> Function() operation,
+  ) async {
+    final generation = _sessionGeneration;
+    updatingMemoryIds.add(memoryId);
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final updated = await operation();
+      if (generation != _sessionGeneration || session == null) return false;
+      // Confirm/edit responses may intentionally issue a fresh memory id.
+      // Remove both the submitted candidate and any returned duplicate before
+      // inserting the server's canonical record.
+      memories = [
+        for (final item in memories)
+          if (item.id != memoryId && item.id != updated.id) item,
+        updated,
+      ];
+      memorySearchResults = [
+        for (final item in memorySearchResults)
+          if (item.id != memoryId && item.id != updated.id) item,
+        updated,
+      ];
+      // A correction changes the source of any derived story; remove those
+      // local cards until the server returns a newly authored story.
+      stories = [
+        for (final story in stories)
+          if (!story.memoryIds.contains(memoryId) &&
+              !story.memoryIds.contains(updated.id)) story,
+      ];
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } finally {
+      updatingMemoryIds.remove(memoryId);
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshStories({bool silent = false}) async {
+    if (!isElder) return;
+    final generation = _sessionGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await api.listStories();
+      if (generation != _sessionGeneration || session == null) return;
+      stories = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> createStory({
+    required String title,
+    required String content,
+    List<String> memoryIds = const [],
+  }) async {
+    if (!isElder || title.trim().isEmpty || content.trim().isEmpty) return false;
+    final generation = _sessionGeneration;
+    loading = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final created = await api.createStory(
+        title: title.trim(),
+        content: content.trim(),
+        memoryIds: memoryIds,
+      );
+      if (generation != _sessionGeneration || session == null) return false;
+      stories = [created, ...stories.where((story) => story.id != created.id)];
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> deleteStory(StoryRecord story) async {
+    if (!isElder || updatingStoryIds.contains(story.id)) return false;
+    final generation = _sessionGeneration;
+    updatingStoryIds.add(story.id);
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await api.deleteStory(story.id);
+      if (generation != _sessionGeneration || session == null) return false;
+      stories = [for (final item in stories) if (item.id != story.id) item];
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } finally {
+      updatingStoryIds.remove(story.id);
+      notifyListeners();
+    }
+  }
+
+  Future<ResourceSearchResult?> searchResources(String query) async {
+    if (query.trim().isEmpty) return null;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final result = await api.searchResources(query: query.trim());
+      if (generation != _sessionGeneration || session == null) return null;
+      resourceItems = result.items;
+      resourceConflicts = result.conflicts;
+      resourceRetrievalMode = result.retrievalMode;
+      notifyListeners();
+      return result;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<void> refreshFamilyMessages({bool silent = false}) async {
+    if (!_canUseFamilyMessages) {
+      familyMessages = const [];
+      notifyListeners();
+      return;
+    }
+    final generation = _sessionGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await api.listFamilyMessages();
+      if (generation != _sessionGeneration || session == null) return;
+      familyMessages = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> sendFamilyMessage({
+    required FamilyInvitation link,
+    required String content,
+    StoryRecord? sourceStory,
+  }) async {
+    final recipientId = recipientIdFor(link);
+    final trimmed = content.trim();
+    if (recipientId == null || trimmed.isEmpty) {
+      errorMessage = '這位家庭成員尚未授權家庭訊息。';
+      notifyListeners();
+      return false;
+    }
+    final generation = _sessionGeneration;
+    final senderUserId = user?.id;
+    if (senderUserId == null || senderUserId.isEmpty) return false;
+    final operationKey = '$recipientId::${sourceStory?.id ?? ''}::$trimmed';
+    if (_sendingFamilyMessageKeys.contains(operationKey)) return false;
+    _sendingFamilyMessageKeys.add(operationKey);
+    var clientMessageId = _familyMessageClientIds[operationKey];
+    clientMessageId ??= await sessionStore.readFamilyMessageClientId(
+      recipientId: recipientId,
+      sourceStoryId: sourceStory?.id,
+      content: trimmed,
+      userId: senderUserId,
+    );
+    if (generation != _sessionGeneration || session?.user.id != senderUserId) {
+      _sendingFamilyMessageKeys.remove(operationKey);
+      return false;
+    }
+    clientMessageId ??= _newClientId('family-message');
+    _familyMessageClientIds[operationKey] = clientMessageId;
+    await sessionStore.saveFamilyMessageClientId(
+      recipientId: recipientId,
+      sourceStoryId: sourceStory?.id,
+      content: trimmed,
+      clientId: clientMessageId,
+      userId: senderUserId,
+    );
+    if (generation != _sessionGeneration || session?.user.id != senderUserId) {
+      _sendingFamilyMessageKeys.remove(operationKey);
+      return false;
+    }
+    errorMessage = null;
+    loading = true;
+    notifyListeners();
+    try {
+      final message = await api.sendFamilyMessage(
+        recipientId: recipientId,
+        content: trimmed,
+        clientMessageId: clientMessageId,
+        sourceStoryId: sourceStory?.id,
+      );
+      if (generation != _sessionGeneration || session == null) return false;
+      familyMessages = [
+        ...familyMessages.where((item) => item.id != message.id),
+        message,
+      ];
+      _familyMessageClientIds.remove(operationKey);
+      await sessionStore.clearFamilyMessageClientId(
+        recipientId: recipientId,
+        sourceStoryId: sourceStory?.id,
+        content: trimmed,
+        userId: senderUserId,
+      );
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      // Keep the operation id so a retry is idempotent after a timeout or
+      // transient 5xx response.
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    } finally {
+      _sendingFamilyMessageKeys.remove(operationKey);
       loading = false;
       notifyListeners();
     }

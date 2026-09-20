@@ -62,10 +62,10 @@ class FamilyInvitationCreate(BaseModel):
 
     @field_validator("scopes")
     @classmethod
-    def only_care_task_scope(cls, value: list[str]) -> list[str]:
+    def supported_family_scopes(cls, value: list[str]) -> list[str]:
         normalized = sorted(set(value))
-        if normalized != ["care_tasks"]:
-            raise ValueError("the only supported family-link scope is care_tasks")
+        if not normalized or not set(normalized) <= {"care_tasks", "family_messages"}:
+            raise ValueError("supported scopes are care_tasks and family_messages")
         return normalized
 
 

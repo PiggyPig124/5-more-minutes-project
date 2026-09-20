@@ -58,7 +58,10 @@ abstract class AnxinApi {
 
   Future<void> dismissAction({required String actionId});
 
-  Future<FamilyInvitation> createInvitation({required String email});
+  Future<FamilyInvitation> createInvitation({
+    required String email,
+    List<String> scopes = const ['care_tasks'],
+  });
 
   Future<List<FamilyInvitation>> listInvitations();
 
@@ -74,6 +77,53 @@ abstract class AnxinApi {
   Future<void> revokeLink({required String linkId});
 
   Future<List<ActionProposal>> listActions(String conversationId);
+
+  Future<List<MemoryRecord>> listMemories();
+
+  Future<MemoryRecord> createMemory({
+    required String content,
+    required String kind,
+    String? sourceMessageId,
+  });
+
+  Future<MemoryRecord> confirmMemory(String memoryId);
+
+  Future<MemoryRecord> updateMemory(
+    String memoryId, {
+    String? content,
+    bool? suppressed,
+  });
+
+  Future<void> deleteMemory(String memoryId);
+
+  Future<MemorySearchResult> searchMemories({
+    required String query,
+    int? limit,
+  });
+
+  Future<List<StoryRecord>> listStories();
+
+  Future<StoryRecord> createStory({
+    required String title,
+    required String content,
+    required List<String> memoryIds,
+  });
+
+  Future<void> deleteStory(String storyId);
+
+  Future<ResourceSearchResult> searchResources({
+    required String query,
+    int? limit,
+  });
+
+  Future<List<FamilyMessage>> listFamilyMessages();
+
+  Future<FamilyMessage> sendFamilyMessage({
+    required String recipientId,
+    required String content,
+    required String clientMessageId,
+    String? sourceStoryId,
+  });
 }
 
 class ApiException implements Exception {
@@ -395,10 +445,13 @@ class RestApiClient implements AnxinApi {
   }
 
   @override
-  Future<FamilyInvitation> createInvitation({required String email}) async {
+  Future<FamilyInvitation> createInvitation({
+    required String email,
+    List<String> scopes = const ['care_tasks'],
+  }) async {
     final body = await _request('POST', '/family-links/invitations', body: {
       'email': email,
-      'scopes': const ['care_tasks'],
+      'scopes': scopes,
     });
     final map = mapFromJson(body);
     if (map == null) throw const ApiException('服務未回覆邀請資料。');
@@ -466,6 +519,184 @@ class RestApiClient implements AnxinApi {
         .where((action) => action.id.isNotEmpty && !action.confirmed && !action.dismissed)
         .toList();
   }
+
+  @override
+  Future<List<MemoryRecord>> listMemories() async {
+    final body = await _request('GET', '/memories');
+    return mapsFromJson(body)
+        .map(MemoryRecord.fromJson)
+        .where((memory) => memory.id.isNotEmpty && memory.content.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<MemoryRecord> createMemory({
+    required String content,
+    required String kind,
+    String? sourceMessageId,
+  }) async {
+    final body = await _request('POST', '/memories', body: {
+      'content': content,
+      'kind': kind,
+      if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
+        'source_message_id': sourceMessageId,
+    });
+    return _requireMemory(body);
+  }
+
+  @override
+  Future<MemoryRecord> confirmMemory(String memoryId) async {
+    final body = await _request(
+      'POST',
+      '/memories/${Uri.encodeComponent(memoryId)}/confirm',
+    );
+    return _requireMemory(body);
+  }
+
+  @override
+  Future<MemoryRecord> updateMemory(
+    String memoryId, {
+    String? content,
+    bool? suppressed,
+  }) async {
+    final body = await _request(
+      'PATCH',
+      '/memories/${Uri.encodeComponent(memoryId)}',
+      body: {
+        if (content != null) 'content': content,
+        if (suppressed != null) 'suppressed': suppressed,
+      },
+    );
+    return _requireMemory(body);
+  }
+
+  @override
+  Future<void> deleteMemory(String memoryId) async {
+    await _request(
+      'DELETE',
+      '/memories/${Uri.encodeComponent(memoryId)}',
+    );
+  }
+
+  @override
+  Future<MemorySearchResult> searchMemories({
+    required String query,
+    int? limit,
+  }) async {
+    final body = await _request('POST', '/memories/search', body: {
+      'query': query,
+      if (limit != null) 'limit': limit,
+    });
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    return MemorySearchResult(
+      items: mapsFromJson(map['items'] ?? map)
+          .map(MemoryRecord.fromJson)
+          .where((memory) => memory.id.isNotEmpty)
+          .toList(),
+      retrievalMode: _stringValue(map, const [
+        'retrieval_mode',
+        'retrievalMode',
+        'memory_retrieval_mode',
+        'mode',
+      ]),
+    );
+  }
+
+  @override
+  Future<List<StoryRecord>> listStories() async {
+    final body = await _request('GET', '/stories');
+    return mapsFromJson(body)
+        .map(StoryRecord.fromJson)
+        .where((story) => story.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<StoryRecord> createStory({
+    required String title,
+    required String content,
+    required List<String> memoryIds,
+  }) async {
+    final body = await _request('POST', '/stories', body: {
+      'title': title,
+      'content': content,
+      'memory_ids': memoryIds,
+    });
+    final map = mapFromJson(body);
+    if (map == null) throw const ApiException('服務未回覆故事資料。');
+    final story = StoryRecord.fromJson(map);
+    if (story.id.isEmpty) throw const ApiException('服務未回覆故事編號。');
+    return story;
+  }
+
+  @override
+  Future<void> deleteStory(String storyId) async {
+    await _request('DELETE', '/stories/${Uri.encodeComponent(storyId)}');
+  }
+
+  @override
+  Future<ResourceSearchResult> searchResources({
+    required String query,
+    int? limit,
+  }) async {
+    final body = await _request('POST', '/resources/search', body: {
+      'query': query,
+      if (limit != null) 'limit': limit,
+    });
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final rawConflicts = map['conflicts'] ?? map['resource_conflicts'];
+    return ResourceSearchResult(
+      query: _stringValue(map, const ['query']) ?? query,
+      retrievalMode: _stringValue(map, const [
+        'retrieval_mode',
+        'retrievalMode',
+        'resource_retrieval_mode',
+        'mode',
+      ]),
+      items: mapsFromJson(map['items'] ?? map)
+          .map(ResourceItem.fromJson)
+          .where((item) => item.id.isNotEmpty || item.title.isNotEmpty)
+          .toList(),
+      conflicts: rawConflicts is List
+          ? rawConflicts.map(ResourceConflict.fromJson).toList()
+          : const [],
+    );
+  }
+
+  @override
+  Future<List<FamilyMessage>> listFamilyMessages() async {
+    final body = await _request('GET', '/family-messages');
+    return mapsFromJson(body)
+        .map(FamilyMessage.fromJson)
+        .where((message) => message.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<FamilyMessage> sendFamilyMessage({
+    required String recipientId,
+    required String content,
+    required String clientMessageId,
+    String? sourceStoryId,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/family-messages',
+      body: {
+        'recipient_id': recipientId,
+        'content': content,
+        'client_message_id': clientMessageId,
+        if (sourceStoryId != null && sourceStoryId.trim().isNotEmpty)
+          'source_story_id': sourceStoryId,
+      },
+      idempotencyKey: clientMessageId,
+    );
+    final map = mapFromJson(body);
+    if (map == null) throw const ApiException('服務未回覆家庭訊息。');
+    final message = FamilyMessage.fromJson(map);
+    if (message.id.isEmpty) throw const ApiException('服務未回覆家庭訊息編號。');
+    return message;
+  }
 }
 
 Map<String, dynamic>? _mapOrEmpty(Object? value) {
@@ -482,5 +713,22 @@ bool? _demoModeValue(Object? value) {
     if (value == 'openai_compatible' || value == 'live') return false;
   }
   if (value is bool) return value;
+  return null;
+}
+
+MemoryRecord _requireMemory(Object? body) {
+  final map = mapFromJson(body);
+  if (map == null) throw const ApiException('服務未回覆記憶資料。');
+  final memory = MemoryRecord.fromJson(map);
+  if (memory.id.isEmpty) throw const ApiException('服務未回覆記憶編號。');
+  return memory;
+}
+
+String? _stringValue(Map<String, dynamic> map, List<String> keys) {
+  for (final key in keys) {
+    final value = map[key];
+    if (value is String && value.trim().isNotEmpty) return value;
+    if (value is num || value is bool) return value.toString();
+  }
   return null;
 }

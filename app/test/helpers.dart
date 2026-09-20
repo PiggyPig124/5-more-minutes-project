@@ -6,12 +6,19 @@ class FakeApi implements AnxinApi {
 
   UserRole role;
   bool failSend = false;
+  bool failFamilyMessageSend = false;
   String? lastMessageClientId;
   String? lastActionClientId;
+  String? lastFamilyMessageClientId;
+  String? lastFamilyMessageSourceStoryId;
+  List<String>? lastInvitationScopes;
   int actionConfirmations = 0;
   final List<CareTask> fakeTasks = <CareTask>[];
   final List<FamilyInvitation> fakeInvitations = <FamilyInvitation>[];
   final List<FamilyInvitation> fakeLinks = <FamilyInvitation>[];
+  final List<MemoryRecord> fakeMemories = <MemoryRecord>[];
+  final List<StoryRecord> fakeStories = <StoryRecord>[];
+  final List<FamilyMessage> fakeFamilyMessages = <FamilyMessage>[];
   final List<Conversation> fakeConversations = <Conversation>[];
   final Map<String, List<ChatMessage>> fakeMessages = <String, List<ChatMessage>>{};
   ActionProposal? fakeAction;
@@ -87,8 +94,9 @@ class FakeApi implements AnxinApi {
   Future<void> dismissAction({required String actionId}) async {}
 
   @override
-  Future<FamilyInvitation> createInvitation({required String email}) async {
-    final invitation = FamilyInvitation(id: 'invitation-1', email: email, status: InvitationStatus.pending, token: 'token-for-test-123456');
+  Future<FamilyInvitation> createInvitation({required String email, List<String> scopes = const ['care_tasks']}) async {
+    lastInvitationScopes = scopes;
+    final invitation = FamilyInvitation(id: 'invitation-1', email: email, status: InvitationStatus.pending, token: 'token-for-test-123456', scopes: scopes);
     fakeInvitations.insert(0, invitation);
     return invitation;
   }
@@ -114,4 +122,67 @@ class FakeApi implements AnxinApi {
 
   @override
   Future<List<ActionProposal>> listActions(String conversationId) async => fakeAction == null ? const [] : [fakeAction!];
+
+  @override
+  Future<List<MemoryRecord>> listMemories() async => List.of(fakeMemories);
+
+  @override
+  Future<MemoryRecord> createMemory({required String content, required String kind, String? sourceMessageId}) async {
+    final memory = MemoryRecord(id: 'memory-${fakeMemories.length + 1}', content: content, kind: kind, status: 'candidate', sourceMessageId: sourceMessageId);
+    fakeMemories.insert(0, memory);
+    return memory;
+  }
+
+  @override
+  Future<MemoryRecord> confirmMemory(String memoryId) async {
+    final index = fakeMemories.indexWhere((memory) => memory.id == memoryId);
+    final old = fakeMemories[index];
+    final updated = MemoryRecord(id: old.id, content: old.content, kind: old.kind, status: 'confirmed', suppressed: old.suppressed, sourceMessageId: old.sourceMessageId);
+    fakeMemories[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<MemoryRecord> updateMemory(String memoryId, {String? content, bool? suppressed}) async {
+    final index = fakeMemories.indexWhere((memory) => memory.id == memoryId);
+    final old = fakeMemories[index];
+    final updated = MemoryRecord(id: old.id, content: content ?? old.content, kind: old.kind, status: old.status, suppressed: suppressed ?? old.suppressed, sourceMessageId: old.sourceMessageId);
+    fakeMemories[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteMemory(String memoryId) async => fakeMemories.removeWhere((memory) => memory.id == memoryId);
+
+  @override
+  Future<MemorySearchResult> searchMemories({required String query, int? limit}) async => MemorySearchResult(items: fakeMemories.where((memory) => memory.content.contains(query)).toList(), retrievalMode: 'local');
+
+  @override
+  Future<List<StoryRecord>> listStories() async => List.of(fakeStories);
+
+  @override
+  Future<StoryRecord> createStory({required String title, required String content, required List<String> memoryIds}) async {
+    final story = StoryRecord(id: 'story-${fakeStories.length + 1}', title: title, content: content, memoryIds: memoryIds);
+    fakeStories.insert(0, story);
+    return story;
+  }
+
+  @override
+  Future<void> deleteStory(String storyId) async => fakeStories.removeWhere((story) => story.id == storyId);
+
+  @override
+  Future<ResourceSearchResult> searchResources({required String query, int? limit}) async => ResourceSearchResult(query: query, retrievalMode: 'local');
+
+  @override
+  Future<List<FamilyMessage>> listFamilyMessages() async => List.of(fakeFamilyMessages);
+
+  @override
+  Future<FamilyMessage> sendFamilyMessage({required String recipientId, required String content, required String clientMessageId, String? sourceStoryId}) async {
+    lastFamilyMessageClientId = clientMessageId;
+    lastFamilyMessageSourceStoryId = sourceStoryId;
+    if (failFamilyMessageSend) throw const ApiException('家庭訊息暫時未能發送。', statusCode: 503);
+    final message = FamilyMessage(id: 'family-message-${fakeFamilyMessages.length + 1}', senderId: role == UserRole.elder ? 'elder-1' : 'caregiver-1', recipientId: recipientId, content: content, sourceStoryId: sourceStoryId);
+    fakeFamilyMessages.add(message);
+    return message;
+  }
 }

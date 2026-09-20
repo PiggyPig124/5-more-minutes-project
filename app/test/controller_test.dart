@@ -111,6 +111,85 @@ void main() {
     expect(controller.user?.role, UserRole.caregiver);
     expect(controller.tasks.where((task) => task.id == 'elder-only'), isEmpty);
   });
+
+  test('memories remain explicit candidates and destructive changes retract local stories', () async {
+    final api = FakeApi();
+    final controller = AppController(api: api, sessionStore: SessionStore(MemoryLocalStore()));
+    expect(await controller.login(email: 'elder@example.com', password: 'password123'), isTrue);
+    expect(api.fakeMemories, isEmpty);
+    expect(await controller.sendMessage(conversationId: (await controller.startConversation())!.id, content: '我今日心情很好'), isTrue);
+    expect(api.fakeMemories, isEmpty);
+
+    expect(await controller.createMemory(content: '我喜歡在公園散步', kind: 'conversation'), isTrue);
+    final candidate = controller.memories.single;
+    expect(candidate.isCandidate, isTrue);
+    expect(await controller.confirmMemory(candidate), isTrue);
+    expect(controller.memories.single.isConfirmed, isTrue);
+
+    final story = await api.createStory(title: '我的習慣', content: '我喜歡在公園散步', memoryIds: [controller.memories.single.id]);
+    controller.stories = [story];
+    expect(await controller.editMemory(controller.memories.single, '我喜歡早上在公園散步'), isTrue);
+    expect(controller.stories, isEmpty);
+    expect(await controller.deleteMemory(controller.memories.single), isTrue);
+    expect(controller.memories, isEmpty);
+  });
+
+  test('family message review operation retries with the same id then clears it after success', () async {
+    final store = MemoryLocalStore();
+    final api = FakeApi()
+      ..fakeLinks.add(
+        const FamilyInvitation(
+          id: 'link-1',
+          email: 'caregiver@example.com',
+          status: InvitationStatus.accepted,
+          scopes: ['care_tasks', 'family_messages'],
+          elderId: 'elder-1',
+          caregiverId: 'caregiver-1',
+          name: '照顧者',
+        ),
+      );
+    final controller = AppController(api: api, sessionStore: SessionStore(store));
+    expect(await controller.login(email: 'elder@example.com', password: 'password123'), isTrue);
+    final link = controller.familyMessageLinks.single;
+    api.failFamilyMessageSend = true;
+    expect(await controller.sendFamilyMessage(link: link, content: '記得飲水'), isFalse);
+    final firstId = api.lastFamilyMessageClientId;
+    expect(firstId, isNotNull);
+
+    api.failFamilyMessageSend = false;
+    expect(await controller.sendFamilyMessage(link: link, content: '記得飲水'), isTrue);
+    expect(api.lastFamilyMessageClientId, firstId);
+    expect(controller.familyMessages, hasLength(1));
+
+    expect(await controller.sendFamilyMessage(link: link, content: '記得飲水'), isTrue);
+    expect(api.lastFamilyMessageClientId, isNot(firstId));
+    expect(controller.familyMessages, hasLength(2));
+  });
+
+  test('a delayed family message storage read cannot send after account switch', () async {
+    final store = _DelayedFamilyStore();
+    final api = FakeApi()
+      ..fakeLinks.add(
+        const FamilyInvitation(
+          id: 'link-1',
+          email: 'caregiver@example.com',
+          status: InvitationStatus.accepted,
+          scopes: ['care_tasks', 'family_messages'],
+          elderId: 'elder-1',
+          caregiverId: 'caregiver-1',
+        ),
+      );
+    final controller = AppController(api: api, sessionStore: SessionStore(store));
+    expect(await controller.login(email: 'elder@example.com', password: 'password123'), isTrue);
+    final pending = controller.sendFamilyMessage(link: controller.familyMessageLinks.single, content: '只應該屬於舊帳戶');
+    await Future<void>.delayed(Duration.zero);
+    await controller.logout();
+    api.role = UserRole.caregiver;
+    expect(await controller.login(email: 'caregiver@example.com', password: 'password123'), isTrue);
+    store.releaseFamilyRead();
+    expect(await pending, isFalse);
+    expect(api.lastFamilyMessageClientId, isNull);
+  });
 }
 
 class _ExpiredApi extends FakeApi {
@@ -135,5 +214,23 @@ class _GenerationApi extends FakeApi {
   void releaseBlockedTaskLoad() {
     _blockedTasks?.complete(const <CareTask>[]);
     _blockedTasks = null;
+  }
+}
+
+class _DelayedFamilyStore extends MemoryLocalStore {
+  Completer<String?>? _familyRead;
+
+  @override
+  Future<String?> read(String key) {
+    if (key.startsWith(SessionStore.familyMessageIdPrefix)) {
+      _familyRead ??= Completer<String?>();
+      return _familyRead!.future;
+    }
+    return super.read(key);
+  }
+
+  void releaseFamilyRead() {
+    _familyRead?.complete(null);
+    _familyRead = null;
   }
 }

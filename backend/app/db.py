@@ -44,5 +44,11 @@ def get_db(request: Request) -> Generator[Session, None, None]:
 def initialize_database(engine: Engine) -> None:
     # Importing models before create_all registers every table on Base.metadata.
     from . import models  # noqa: F401
+    from . import collaboration_models  # noqa: F401
+    from . import memory_models, resource_models  # noqa: F401
+
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
     Base.metadata.create_all(bind=engine)

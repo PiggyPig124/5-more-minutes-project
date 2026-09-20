@@ -11,6 +11,9 @@ from .config import Settings
 from .db import initialize_database, make_engine, make_session_factory
 from .orchestrator import ConversationOrchestrator
 from .routers import actions, auth, conversations, family, tasks
+from .routers import family_messages
+from .routers import memories, stories, resources
+from .resource_service import seed_resources
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -22,10 +25,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         initialize_database(app.state.engine)
+        with app.state.session_factory() as db:
+            seed_resources(db)
         yield
         app.state.engine.dispose()
 
-    app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
@@ -43,6 +48,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(family.router)
+    app.include_router(family_messages.router)
+    app.include_router(memories.router)
+    app.include_router(stories.router)
+    app.include_router(resources.router)
     app.include_router(conversations.router)
     app.include_router(actions.router)
     app.include_router(tasks.router)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,6 +12,9 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..dependencies import get_current_account, get_owned_conversation
 from ..models import Account, ActionProposal, Conversation, Message
+from ..memory_models import PersonalMemory
+from ..memory_service import retrieve_for_chat, propose_from_message, memory_revision
+from ..resource_service import search_resources
 from ..schemas import (
     ActionOut,
     ConversationCreate,
@@ -87,7 +92,7 @@ def _refresh_context(db: Session, conversation: Conversation) -> None:
     conversation.updated_at = datetime.now(timezone.utc)
 
 
-def _lock_conversation_for_write(db: Session, conversation_id: str) -> Conversation:
+def _lock_conversation_for_write(db: Session, conversation_id: str, owner_id: str) -> Conversation:
     """Serialize ordinal allocation and message writes per conversation."""
 
     if db.bind is not None and db.bind.dialect.name == "sqlite":
@@ -97,6 +102,7 @@ def _lock_conversation_for_write(db: Session, conversation_id: str) -> Conversat
         db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         conversation = db.get(Conversation, conversation_id)
     else:
+        db.scalar(select(Account).where(Account.id == owner_id).with_for_update())
         conversation = db.scalar(
             select(Conversation).where(Conversation.id == conversation_id).with_for_update()
         )
@@ -202,6 +208,8 @@ async def send_message(
     account: Account = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> SendMessageOut:
+    owner_id = account.id
+    context_revision = memory_revision(db, owner_id)
     conversation = get_owned_conversation(db, account, conversation_id)
     if payload.client_message_id:
         existing = db.scalar(
@@ -222,6 +230,21 @@ async def send_message(
         "rolling_summary": conversation.rolling_summary or "",
         "recent_context": list(conversation.recent_context or []),
     }
+    memory_result = await retrieve_for_chat(db, owner_id, payload.content)
+    context["memory_sources"] = jsonable_encoder(memory_result["items"])
+    context["memory_retrieval_mode"] = memory_result["retrieval_mode"]
+    resource_query = bool(re.search(
+        r"福利|津貼|津贴|補助|补助|資助|资助|醫療費|医疗费|覆診費|覆诊费|"
+        r"照顧者支援|照顾者支援|社區照顧|社区照顾|長者中心|长者中心|"
+        r"\bwelfare\b|\bsubsid(?:y|ies)\b|\bfee waiver\b|\bcaregiver support\b",
+        payload.content, re.IGNORECASE,
+    ))
+    context["resource_query"] = resource_query
+    resource_result = {"items": [], "retrieval_mode": "not_requested", "conflicts": []}
+    if resource_query:
+        resource_result = await search_resources(db, payload.content[:500])
+    context["resource_sources"] = resource_result["items"]
+    context["resource_conflicts"] = resource_result["conflicts"]
     # Release the read transaction while a remote model provider is running.
     # Authorization and ownership were checked above; the write transaction
     # starts only after the provider returns.
@@ -240,7 +263,17 @@ async def send_message(
     # write section now, rechecking the client key in case another request
     # completed the same message while the provider was running.
     db.rollback()
-    conversation = _lock_conversation_for_write(db, conversation_id)
+    conversation = _lock_conversation_for_write(db, conversation_id, owner_id)
+    if memory_revision(db, owner_id) != context_revision:
+        raise HTTPException(409, "記憶資料已更新，請重試以使用最新內容。")
+    # A memory may have been withdrawn while a remote model was answering.
+    # Reject that stale answer instead of resurrecting its text in history.
+    for source in context["memory_sources"]:
+        current = db.scalar(select(PersonalMemory).where(PersonalMemory.id == source["id"]).with_for_update())
+        if (current is None or current.owner_id != owner_id or current.status != "confirmed"
+                or current.suppressed or current.deleted_at is not None
+                or current.superseded_by is not None or current.content != source["content"]):
+            raise HTTPException(409, "記憶資料已更新，請重試以使用最新內容。")
     if payload.client_message_id:
         existing = db.scalar(
             select(Message).where(
@@ -260,6 +293,7 @@ async def send_message(
     max_ordinal = db.scalar(select(func.max(Message.ordinal)).where(Message.conversation_id == conversation.id))
     next_ordinal = int(max_ordinal or 0) + 1
     user_metadata = {"client_message_id": payload.client_message_id} if payload.client_message_id else {}
+    user_metadata["source_memory_ids"] = [source["id"] for source in context["memory_sources"]]
     user_message = Message(
         conversation_id=conversation.id,
         sender_id=account.id,
@@ -274,13 +308,28 @@ async def send_message(
         sender_id=None,
         role="assistant",
         content=reply.text,
-        metadata_json={"mode": reply.mode, "demo_label": reply.mode == "deterministic_demo"},
+        metadata_json={
+            "mode": reply.mode, "demo_label": reply.mode == "deterministic_demo",
+            "memory_sources": context["memory_sources"],
+            "memory_retrieval_mode": memory_result["retrieval_mode"],
+            "resource_sources": resource_result["items"],
+            "resource_retrieval_mode": resource_result["retrieval_mode"],
+            "resource_conflicts": resource_result["conflicts"],
+        },
         ordinal=next_ordinal + 1,
     )
     action = None
     try:
         db.add_all([user_message, assistant_message])
         db.flush()
+        if account.role == "elder":
+            candidate = propose_from_message(db, owner_id, user_message)
+            if candidate is not None:
+                assistant_message.metadata_json = {
+                    **assistant_message.metadata_json,
+                    "candidate_memory_id": candidate.id,
+                }
+                assistant_message.content += "\n已整理成待確認記憶；請到「記憶」核對，確認前不會用作長期回憶。"
         if reply.proposed_task is not None:
             action = ActionProposal(
                 conversation_id=conversation.id,

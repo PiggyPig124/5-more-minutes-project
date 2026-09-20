@@ -44,3 +44,20 @@ script launches two short-lived API processes against the same temporary
 SQLite database and signing secret, then removes its fixture.  It verifies
 old-token validity, reloads bounded context and pending proposals, and checks
 that the deterministic reply can recall a persisted marker after restart.
+
+The interim journey runner adds confirmed personal memory recall, suppression,
+correction, story sharing, replies, deletion propagation, official resource
+provenance, abstention, and family-message revocation:
+
+```powershell
+.venv\Scripts\python.exe acceptance\interim_api_acceptance.py --base-url http://127.0.0.1:8013
+```
+
+Use a disposable demo-mode server. This script creates synthetic users and
+deletes only memories and stories it creates during the test.
+
+Run `.venv\Scripts\python.exe acceptance\interim_restart_acceptance.py` for
+the interim lifecycle check. It starts three short-lived API processes against
+one temporary SQLite database, verifies confirmed memory and story persistence,
+then checks that withdrawal and conversation sanitization survive another restart.
+It removes its own temporary fixture after completion.

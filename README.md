@@ -1,8 +1,8 @@
 # 安心伴 / Anxin Companion
 
-Foundation implementation of the [implementation plan](IMPLEMENTATION_PLAN_EN.md): a Flutter app with older-adult and caregiver experiences, backed by a Python API. This stage covers accounts, family authorization, text conversations, persisted short-term context, and explicit task confirmation.
+Interim implementation of the [implementation plan](IMPLEMENTATION_PLAN_EN.md): a Flutter app with older-adult and caregiver experiences, backed by a Python API. It covers accounts, family authorization, text conversations, short-term context, confirmed personal memories, official resource retrieval, private stories, and consented family messages.
 
-Long-term personal memory RAG, welfare RAG, Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. This foundation does not claim to implement them.
+Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo.
 
 ## Project layout
 
@@ -11,7 +11,10 @@ Long-term personal memory RAG, welfare RAG, Cantonese voice, scheduled notificat
 - `acceptance/`: independent live API acceptance checks.
 - `scripts/`: local startup helpers.
 - `FOUNDATION_ACCEPTANCE.md`: acceptance requirements and evidence scope.
-- `VERIFICATION.md`: final verification results and known limitations.
+- `VERIFICATION.md`: archived foundation verification results.
+- `INTERIM_REPORT_EN.md`: interim project report.
+- `INTERIM_VERIFICATION.md`: interim checks, reproduction, and remaining limits.
+- `docs/KNOWLEDGE_SOURCES.md`: official source provenance and refresh procedure.
 
 ## Start the backend locally
 
@@ -37,6 +40,47 @@ $env:MODEL_NAME = '<your-model>'
 ```
 
 The key stays on the server. Configure a model that supports the backend's documented structured response contract. Provider errors are surfaced rather than silently treated as successful actions.
+
+### Personal memory and public retrieval
+
+Save a memory as a candidate, review it, then confirm it. Only confirmed,
+unsuppressed facts, experiences, and preferences can be recalled across
+conversations. Emotion entries are excluded from factual recall. Corrections
+create a new candidate for review. Suppression, correction, and deletion withdraw
+related story cards and sanitize their tracked chat references and shared copies.
+Deletion also removes vectors and correction-chain content from application
+storage. This does not erase screenshots, exports, or recipients' external copies.
+
+For semantic retrieval, configure an embedding provider separately:
+
+```powershell
+$env:EMBEDDING_API_KEY = '<your-embedding-key>'
+$env:EMBEDDING_BASE_URL = 'https://your-provider.example/v1'
+$env:EMBEDDING_MODEL = '<multilingual-embedding-model>'
+$env:EMBEDDING_DIMENSIONS = '1536'
+```
+
+Set the dimension to the model's output size before creating the PostgreSQL
+schema. Changing the dimension on an existing PostgreSQL database requires a
+migration and reindexing. Reconfirming an existing memory refreshes its embedding
+after provider configuration or a model change. SQLite supports local development;
+PostgreSQL uses the pgvector extension. Real provider quality requires separate
+evaluation with Hong Kong Cantonese and Traditional Chinese examples.
+
+The public knowledge collection contains six reviewed official source records.
+It is seeded into separate public tables at startup. Results include conditions,
+missing information, three next steps, and an official link. They are leads for
+enquiry, not eligibility decisions. See the source register before updating them.
+
+### Family messages and stories
+
+New invitations can explicitly include `family_messages`; existing `care_tasks`
+links gain no additional permissions automatically. Select the message permission
+and accept a new invitation to enable it. Both roles can exchange text within
+that scope. Sharing a private story requires a recipient/content preview and
+confirmation. Retries reuse the original operation ID. Revoking a link blocks
+subsequent reads and sends, including retries. Message updates currently require
+refreshing the screen; push notifications belong to the following milestone.
 
 ## Start the Flutter client
 
@@ -71,7 +115,7 @@ cd app
 flutter test test/live_api_test.dart --dart-define=RUN_LIVE_API_TESTS=true --dart-define=API_ORIGIN=http://127.0.0.1:8000
 ```
 
-The delivered debug APK at `dist/anxin-companion-foundation.apk` targets
+The current debug APK at `dist/anxin-companion-interim.apk` targets
 `http://10.0.2.2:8000` for the Android emulator. A physical phone needs a rebuild
 with its reachable API address (for example the USB reverse address above).
 
@@ -79,7 +123,12 @@ with its reachable API address (for example the USB reverse address above).
 
 `compose.yaml` supplies PostgreSQL with pgvector and the API. Set `POSTGRES_PASSWORD` to a URL-safe random password and `AUTH_SECRET` to a separate random secret before `docker compose up --build`. The API port binds only to host loopback; production access requires an HTTPS reverse proxy.
 
-The foundation creates its schema at startup. Versioned migrations, operational hardening, email verification, and public deployment review are required before broader real-user rollout. The presence of pgvector in the deployment image does not mean long-term RAG is implemented in this stage.
+The service creates missing tables and seeds the reviewed public collection at
+startup. The interim schema adds tables to the foundation without deleting its
+accounts or conversations. Versioned migrations, operational hardening, email
+verification, and public deployment review are required before broader real-user
+rollout. Vector search requires configuring the embedding service; installing
+pgvector alone does not create embeddings.
 
 ## Verification limits
 

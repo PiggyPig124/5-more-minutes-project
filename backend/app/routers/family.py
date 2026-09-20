@@ -76,7 +76,7 @@ def create_invitation(
         elder_id=account.id,
         email=payload.email,
         token_digest=_digest(raw_token),
-        scopes=["care_tasks"],
+        scopes=list(payload.scopes),
         expires_at=datetime.now(timezone.utc) + timedelta(days=INVITATION_DAYS),
     )
     db.add(invitation)
@@ -144,11 +144,11 @@ def _accept_invitation(
         )
     )
     if link is None:
-        link = FamilyLink(elder_id=invitation.elder_id, caregiver_id=account.id, scopes=["care_tasks"], status="active")
+        link = FamilyLink(elder_id=invitation.elder_id, caregiver_id=account.id, scopes=list(invitation.scopes), status="active")
         db.add(link)
     else:
         link.status = "active"
-        link.scopes = ["care_tasks"]
+        link.scopes = list(invitation.scopes)
         link.revoked_at = None
     invitation.status = "accepted"
     invitation.accepted_by = account.id
@@ -221,10 +221,14 @@ def list_links(account: Account = Depends(get_current_account), db: Session = De
 
 
 def _revoke_link(link_id: str, account: Account, db: Session) -> FamilyLinkOut:
-    link = db.get(FamilyLink, link_id)
+    account_id = account.id
+    db.rollback()
+    if db.bind.dialect.name == "sqlite":
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    link = db.scalar(select(FamilyLink).where(FamilyLink.id == link_id).with_for_update())
     if link is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Family link not found")
-    if account.id not in {link.elder_id, link.caregiver_id}:
+    if account_id not in {link.elder_id, link.caregiver_id}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot revoke this family link")
     if link.status != "revoked":
         link.status = "revoked"

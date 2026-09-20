@@ -51,6 +51,7 @@ class SessionStore {
   static const demoKey = 'anxin.demo_mode';
   static const draftPrefix = 'anxin.draft.';
   static const draftIdPrefix = 'anxin.draft_id.';
+  static const familyMessageIdPrefix = 'anxin.family_message_id.';
 
   final LocalStore _store;
 
@@ -119,4 +120,62 @@ class SessionStore {
 
   Future<void> clearDraftClientId(String conversationId, {String? userId}) =>
       _store.delete(draftClientIdKey(conversationId, userId: userId));
+
+  String familyMessageClientIdKey({
+    required String recipientId,
+    String? sourceStoryId,
+    required String content,
+    String? userId,
+  }) {
+    final operation = '$recipientId\u0000${sourceStoryId ?? ''}\u0000$content';
+    final encoded = base64Url.encode(utf8.encode(operation));
+    return '$familyMessageIdPrefix${userId ?? 'anonymous'}.$encoded';
+  }
+
+  Future<String?> readFamilyMessageClientId({
+    required String recipientId,
+    String? sourceStoryId,
+    required String content,
+    String? userId,
+  }) =>
+      _store.read(
+        familyMessageClientIdKey(
+          recipientId: recipientId,
+          sourceStoryId: sourceStoryId,
+          content: content,
+          userId: userId,
+        ),
+      );
+
+  Future<void> saveFamilyMessageClientId({
+    required String recipientId,
+    String? sourceStoryId,
+    required String content,
+    required String clientId,
+    String? userId,
+  }) =>
+      _store.write(
+        familyMessageClientIdKey(
+          recipientId: recipientId,
+          sourceStoryId: sourceStoryId,
+          content: content,
+          userId: userId,
+        ),
+        clientId,
+      );
+
+  Future<void> clearFamilyMessageClientId({
+    required String recipientId,
+    String? sourceStoryId,
+    required String content,
+    String? userId,
+  }) =>
+      _store.delete(
+        familyMessageClientIdKey(
+          recipientId: recipientId,
+          sourceStoryId: sourceStoryId,
+          content: content,
+          userId: userId,
+        ),
+      );
 }
