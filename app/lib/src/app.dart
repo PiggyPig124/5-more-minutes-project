@@ -28,6 +28,15 @@ class AnxinApp extends ConsumerWidget {
       title: '安心伴',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
+      builder: (context, child) => ColoredBox(
+        color: const Color(0xFFEAF0ED),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 880),
+            child: child!,
+          ),
+        ),
+      ),
       home: const RootView(),
     );
   }
@@ -48,6 +57,22 @@ ThemeData _buildTheme() {
     visualDensity: VisualDensity.standard,
   );
   return base.copyWith(
+    appBarTheme: const AppBarTheme(
+      backgroundColor: cream,
+      surfaceTintColor: Colors.transparent,
+      centerTitle: false,
+      toolbarHeight: 68,
+      titleTextStyle: TextStyle(color: Color(0xFF183D3C), fontSize: 22, fontWeight: FontWeight.w700),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(minimumSize: const Size(48, 52), padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(minimumSize: const Size(48, 52)),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+    ),
     textTheme: base.textTheme.copyWith(
       displaySmall: const TextStyle(fontSize: 34, fontWeight: FontWeight.w700),
       headlineSmall: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
@@ -365,6 +390,10 @@ class AccountSheet extends ConsumerWidget {
             Text(user.displayName.isEmpty ? user.role.label : user.displayName, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 5),
             Text('${user.email} · ${user.role.label}', style: Theme.of(context).textTheme.bodyMedium),
+            if (controller.session?.demoMode == true) ...[
+              const SizedBox(height: 16),
+              const Text('目前使用示範回覆，尚未連接 AI 模型。你仍可試用記憶、資源和家庭功能。'),
+            ],
             const SizedBox(height: 20),
             OutlinedButton.icon(
               onPressed: controller.loading
@@ -398,7 +427,6 @@ class ElderHome extends ConsumerWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
         children: [
-          if (controller.session?.demoMode == true) const DemoModeLabel(),
           Text('你好，${user?.displayName.isNotEmpty == true ? user!.displayName : '朋友'}', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 6),
           Text('今天想找人傾吓偈，或者一起整理一件小事嗎？', style: Theme.of(context).textTheme.bodyLarge),
@@ -488,7 +516,6 @@ class CaregiverHome extends ConsumerWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
         children: [
-          if (controller.session?.demoMode == true) const DemoModeLabel(),
           Text('照顧概覽', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 7),
           const Text('這裡只顯示長者明確授權的共享照顧事項。私密對話不會出現在照顧者帳戶。'),
@@ -1262,7 +1289,7 @@ class _StoriesScreenState extends ConsumerState<StoriesScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('刪除故事卡？'),
-        content: const Text('已經發出的家庭訊息會保留當時的內容；之後不會再顯示這張故事卡。'),
+        content: const Text('這張故事卡及透過它分享的家庭訊息內容會撤回。對方已另行保存的副本無法撤回。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('返回')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('確認刪除')),
@@ -1458,12 +1485,22 @@ class _ResourcesScreenState extends ConsumerState<ResourcesScreen> {
               child: TextField(
                 controller: _query,
                 onSubmitted: (_) => _search(),
-                decoration: const InputDecoration(labelText: '例如：長者交通優惠', prefixIcon: Icon(Icons.search_rounded)),
+                decoration: const InputDecoration(labelText: '例如：醫療費用減免', prefixIcon: Icon(Icons.search_rounded)),
               ),
             ),
             const SizedBox(width: 8),
             IconButton.filled(tooltip: '搜尋資源', onPressed: _search, icon: const Icon(Icons.search_rounded), style: IconButton.styleFrom(minimumSize: const Size(54, 54))),
           ]),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: ['醫療費用減免', '照顧者支援', '日間暫託'].map((query) => ActionChip(
+              label: Text(query),
+              onPressed: () { _query.text = query; _search(); },
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            )).toList(),
+          ),
           if (controller.resourceRetrievalMode != null) ...[
             const SizedBox(height: 12),
             Text('查找方式：${_retrievalLabel(controller.resourceRetrievalMode)}', style: Theme.of(context).textTheme.bodyMedium),
@@ -1474,7 +1511,7 @@ class _ResourcesScreenState extends ConsumerState<ResourcesScreen> {
           ],
           const SizedBox(height: 16),
           if (controller.resourceItems.isEmpty)
-            const EmptyCard(icon: Icons.local_library_outlined, message: '輸入關鍵字後，資源會在這裡顯示。')
+            EmptyCard(icon: Icons.local_library_outlined, message: controller.resourceRetrievalMode == null ? '輸入你需要的支援，或點選上面的常用搜尋。' : '暫時找不到相符資料。試試較簡單的字詞，例如「照顧者支援」。')
           else
             ...controller.resourceItems.map((item) => ResourceCard(item: item)),
           if (controller.errorMessage != null) ...[
@@ -1500,48 +1537,78 @@ class ResourceCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(17, 16, 17, 15),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(item.title, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 7),
-          Text(item.excerpt, style: Theme.of(context).textTheme.bodyLarge),
-          if (item.verifiedAt != null || item.effectiveDate != null) ...[
-            const SizedBox(height: 8),
-            Text('核實：${_dateLabel(item.verifiedAt)}${item.effectiveDate == null ? '' : ' · 生效：${_dateLabel(item.effectiveDate)}'}', style: Theme.of(context).textTheme.bodyMedium),
-          ],
-          if (item.conditions.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('適用條件：${item.conditions.join('、')}', style: Theme.of(context).textTheme.bodyMedium),
-          ],
-          if (item.missingInformation.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('仍需確認：${item.missingInformation.join('、')}', style: Theme.of(context).textTheme.bodyMedium),
-          ],
-          if (item.nextSteps.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('下一步：${item.nextSteps.join('、')}', style: Theme.of(context).textTheme.bodyMedium),
-          ],
+          const SizedBox(height: 10),
+          if (item.verifiedAt != null)
+            Text('資料核實：${_dateLabel(item.verifiedAt)}', style: const TextStyle(fontSize: 15, color: Color(0xFF526663))),
+          const SizedBox(height: 12),
+          const Text('先了解，再申請；實際資格由服務機構評估。'),
           if (item.url != null && item.url!.isNotEmpty) ...[
-            const SizedBox(height: 9),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: SelectableText(item.url!, style: const TextStyle(color: Color(0xFF116466), decoration: TextDecoration.underline))),
-                const SizedBox(width: 8),
-                TextButton.icon(
-                  onPressed: () async {
-                    final uri = Uri.tryParse(item.url!);
-                    if (uri == null || !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暫時未能開啟來源連結。')));
-                    }
-                  },
-                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                  label: const Text('開啟來源'),
-                ),
-              ],
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final uri = Uri.tryParse(item.url!);
+                if (uri == null || !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+                  if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('暫時未能開啟來源連結。')));
+                }
+              },
+              icon: const Icon(Icons.open_in_new_rounded, size: 20),
+              label: const Text('開啟來源'),
             ),
           ],
+          if (item.nextSteps.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Text('你可以這樣做', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            ...item.nextSteps.asMap().entries.map((step) => Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 30, height: 30, alignment: Alignment.center,
+                  decoration: const BoxDecoration(color: Color(0xFFDDEDEA), shape: BoxShape.circle),
+                  child: Text('${step.key + 1}', style: const TextStyle(color: Color(0xFF116466), fontWeight: FontWeight.w700)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text(step.value)),
+              ]),
+            )),
+          ],
+          const Divider(height: 24),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 16),
+            title: const Text('了解服務及適用條件'),
+            children: [
+              Align(alignment: Alignment.centerLeft, child: Text(item.excerpt)),
+              if (item.effectiveDate != null)
+                Padding(padding: const EdgeInsets.only(top: 12), child: Text('生效日期：${_dateLabel(item.effectiveDate)}')),
+              ...item.conditions.map((text) => _ResourceDetail(text: text)),
+            ],
+          ),
+          if (item.missingInformation.isNotEmpty)
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 16),
+              title: const Text('申請前還需確認甚麼？'),
+              children: item.missingInformation.map((text) => _ResourceDetail(text: text)).toList(),
+            ),
         ]),
       ),
     );
   }
+}
+
+class _ResourceDetail extends StatelessWidget {
+  const _ResourceDetail({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 12),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('•  ', style: TextStyle(color: Color(0xFF116466))),
+      Expanded(child: Text(text)),
+    ]),
+  );
 }
 
 class FamilyMessagesScreen extends ConsumerStatefulWidget {
@@ -1748,7 +1815,7 @@ class DemoModeLabel extends StatelessWidget {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: compact ? 5 : 8),
       decoration: BoxDecoration(color: const Color(0xFFFFE5C1), borderRadius: BorderRadius.circular(12)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.science_outlined, size: compact ? 16 : 19, color: const Color(0xFF8B4E2D)), const SizedBox(width: 6), Text('伺服器示範模式', style: TextStyle(fontSize: compact ? 12 : 15, fontWeight: FontWeight.w700, color: const Color(0xFF8B4E2D)))]),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.science_outlined, size: compact ? 16 : 19, color: const Color(0xFF8B4E2D)), const SizedBox(width: 6), Text(compact ? '示範模式' : '伺服器示範模式', style: TextStyle(fontSize: compact ? 12 : 15, fontWeight: FontWeight.w700, color: const Color(0xFF8B4E2D)))]),
     );
   }
 }
@@ -1801,8 +1868,8 @@ class EmptyCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(children: [Icon(icon, size: 42, color: const Color(0xFF116466)), const SizedBox(height: 12), Text(message, textAlign: TextAlign.center)]),
+        padding: const EdgeInsets.all(20),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, size: 28, color: const Color(0xFF116466)), const SizedBox(width: 14), Expanded(child: Text(message))]),
       ),
     );
   }

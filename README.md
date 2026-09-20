@@ -4,6 +4,8 @@ Interim implementation of the [implementation plan](IMPLEMENTATION_PLAN_EN.md): 
 
 Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo.
 
+使用与演示操作请参阅 [中文使用指南](docs/USER_GUIDE_ZH.md)。
+
 ## Project layout
 
 - `app/`: Flutter client with separate authenticated elder and caregiver experiences.
