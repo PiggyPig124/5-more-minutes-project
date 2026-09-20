@@ -1,13 +1,15 @@
 name: anxin_companion
 description: Anxin Companion Android-first client for older adults and caregivers.
 publish_to: "none"
-version: 0.2.0+2
+version: 0.2.1+3
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   flutter_riverpod: ^2.6.1
   flutter_secure_storage: ^9.2.2

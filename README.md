@@ -4,7 +4,17 @@ Interim implementation of the [implementation plan](IMPLEMENTATION_PLAN_EN.md): 
 
 Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo.
 
-使用与演示操作请参阅 [中文使用指南](docs/USER_GUIDE_ZH.md)。
+For usage and demonstration steps, see the [English user guide](docs/USER_GUIDE_EN.md). A [Chinese guide](docs/USER_GUIDE_ZH.md) is also available.
+
+## Interface language
+
+Open Settings from the sign-in screen or inside the authenticated app to choose
+Traditional Chinese or English. The choice updates the interface and is saved
+on the current device/browser across logout and restart. It does not synchronize
+across devices or translate existing conversations, memories, stories, family
+messages, official resource records, or other server-generated content.
+See the [language verification record](docs/LOCALIZATION_VERIFICATION_EN.md)
+for checks and remaining limits.
 
 ## Project layout
 
@@ -117,7 +127,7 @@ cd app
 flutter test test/live_api_test.dart --dart-define=RUN_LIVE_API_TESTS=true --dart-define=API_ORIGIN=http://127.0.0.1:8000
 ```
 
-The current debug APK at `dist/anxin-companion-interim.apk` targets
+The current debug APK at `dist/anxin-companion-settings.apk` targets
 `http://10.0.2.2:8000` for the Android emulator. A physical phone needs a rebuild
 with its reachable API address (for example the USB reverse address above).
 
