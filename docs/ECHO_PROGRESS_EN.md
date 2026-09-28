@@ -1,7 +1,8 @@
 # Echo Progress Report
 
 **Status as of 28 September 2026**
-**Baseline:** Git commit `673342d` (20 September 2026). This report separates the previous prototype, changes in the current working tree, and work that remains open. It is a progress record, not a claim that the revised MVP is complete.
+
+**Baseline:** Git commit `673342d` (20 September 2026). This report separates the previous prototype, separately developed changes, and work that remains open. It is a progress record, not a claim that the revised MVP is complete.
 
 ## Product direction
 
@@ -35,7 +36,9 @@ The team has decided to defer Cantonese speech-input testing and further communi
 
 ## Newly requested group chat
 
-The product owner has requested group conversations in the chat interface, with the ability to invite community members. The first version is **person-to-person group chat without AI participation**. This is a new requirement, not an implemented feature. It needs a separate SRS change record and privacy design before release: membership by invitation and acceptance, visible participants, leaving and blocking, report and moderation handling, and clear control over what each participant sees. Existing private Echo conversations and confirmed memories must not be copied into a group automatically. Until these controls are specified and tested, the current family messages and private chat should not be described as community group chat.
+The first human-only group-chat prototype is implemented on the `codex/group-chat` branch. A signed-in person can create a private group, invite an already registered member by email, and exchange text messages after that person accepts. The chat interface lists groups and incoming invitations, shows members, refreshes messages, and supports declining invitations, leaving, closing a group, blocking future invitations from an account, and recording a report. Groups have at most 20 active members; invitations expire after seven days. A new or returning member cannot read messages sent before their latest join. Nonmembers cannot read group details, members, or messages. Private Echo conversations and confirmed memories are not copied into a group; no AI route is called for group messages.
+
+This is an **account-based prototype**, not a verified matching service or public community feed. Invitations require the other person's registered email; no external invitation is sent. Reports are stored, but there is no staffed review queue, escalation process, or response-time commitment yet. The group feature must not be presented as a publicly moderated community service until moderation ownership, retention, abuse response, and privacy review are agreed. The group branch was built from the previously pushed progress-document commit, so it does not include the separate uncommitted guest, memory, or web-scraping work described earlier in this report.
 
 ## Next work without speech or community feeds
 
@@ -44,10 +47,10 @@ The product owner has requested group conversations in the chat interface, with 
 3. **Deliver a portable sourced Answer Card.** Preserve the plain-language answer, official term, source, retrieval date, verification state, and next step when saving, printing, or sharing a single card. Complete the transport, healthcare-navigation, scam-guidance, and human-help routes without claiming to perform the official service itself.
 4. **Complete family controls.** Add reject and block actions for connections, and a confirmed plan or accompaniment request with a caregiver reply. Do not expose private chat or the full memory library.
 5. **Evaluate text quality and accessibility.** Keep typing fully usable, test patient responses and Hong Kong wording with a configured text model when credentials are available, and perform real-device usability checks. A configured API is not evidence of model quality.
-6. **Specify and build invitation-based group chat without AI.** Start with account membership, invitation acceptance, participant visibility, leave/block/report actions, and a moderation process; keep private chats and memories isolated.
+6. **Prepare group chat for release.** Define who reviews recorded reports, escalation and retention rules, and an abuse-response process. Run accessibility and real-user checks before describing it as a moderated community feature.
 
 Public memory maps, open help requests, proactive daily greetings, push delivery, direct social-worker messaging, and real-person matching remain outside this immediate work. They require additional consent, moderation, partner arrangements, or operational review. The [feasibility plan](ECHO_DEFERRED_FEATURES_FEASIBILITY_ZH.md) records their proposed gates.
 
 ## Git status at the time of writing
 
-The changes above are present in the working tree but have not yet been committed. The original reference documents supplied for review are also untracked. This report does not imply that those original files should be published with the project.
+The guest, memory, and community-search changes described above are in a separate working tree and have not been included in the group-chat branch. Original reference documents supplied for review are also outside this branch. The group implementation and this report are the only new scope prepared for this push.

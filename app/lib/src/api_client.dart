@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'group_models.dart';
 
 /// The server origin is replaceable at build/run time:
 /// `flutter run --dart-define=API_ORIGIN=http://10.0.2.2:8000`.
@@ -139,7 +140,24 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-class RestApiClient implements AnxinApi {
+abstract interface class HumanGroupApi {
+  Future<List<HumanGroup>> listHumanGroups();
+  Future<List<HumanGroupInvitation>> listHumanGroupInvitations();
+  Future<HumanGroup> createHumanGroup(String title);
+  Future<HumanGroupInvitation> inviteHumanGroupMember(String groupId, String email);
+  Future<HumanGroup> acceptHumanGroupInvitation(String invitationId);
+  Future<void> declineHumanGroupInvitation(String invitationId);
+  Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId);
+  Future<List<HumanGroupMessage>> listHumanGroupMessages(String groupId);
+  Future<HumanGroupMessage> sendHumanGroupMessage(
+      String groupId, String content, String clientMessageId);
+  Future<void> leaveHumanGroup(String groupId);
+  Future<void> closeHumanGroup(String groupId);
+  Future<void> reportHumanGroup(String groupId, String reason);
+  Future<void> blockHumanGroupInvitations(String accountId);
+}
+
+class RestApiClient implements AnxinApi, HumanGroupApi {
   RestApiClient({
     String? origin,
     http.Client? client,
@@ -153,6 +171,78 @@ class RestApiClient implements AnxinApi {
   final http.Client _client;
   final Duration _requestTimeout;
   String? accessToken;
+
+  @override
+  Future<List<HumanGroup>> listHumanGroups() async =>
+      mapsFromJson(await _request('GET', '/groups'))
+          .map(HumanGroup.fromJson).toList(growable: false);
+
+  @override
+  Future<List<HumanGroupInvitation>> listHumanGroupInvitations() async =>
+      mapsFromJson(await _request('GET', '/groups/invitations'))
+          .map(HumanGroupInvitation.fromJson).toList(growable: false);
+
+  @override
+  Future<HumanGroup> createHumanGroup(String title) async => HumanGroup.fromJson(
+      mapFromJson(await _request('POST', '/groups', body: {'title': title}))!);
+
+  @override
+  Future<HumanGroupInvitation> inviteHumanGroupMember(
+          String groupId, String email) async =>
+      HumanGroupInvitation.fromJson(mapFromJson(await _request(
+          'POST', '/groups/${Uri.encodeComponent(groupId)}/invitations',
+          body: {'email': email}))!);
+
+  @override
+  Future<HumanGroup> acceptHumanGroupInvitation(String invitationId) async =>
+      HumanGroup.fromJson(mapFromJson(await _request('POST',
+          '/groups/invitations/${Uri.encodeComponent(invitationId)}/accept'))!);
+
+  @override
+  Future<void> declineHumanGroupInvitation(String invitationId) async {
+    await _request('POST',
+        '/groups/invitations/${Uri.encodeComponent(invitationId)}/decline');
+  }
+
+  @override
+  Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId) async =>
+      mapsFromJson(await _request(
+          'GET', '/groups/${Uri.encodeComponent(groupId)}/members'))
+          .map(HumanGroupMember.fromJson).toList(growable: false);
+
+  @override
+  Future<List<HumanGroupMessage>> listHumanGroupMessages(String groupId) async =>
+      mapsFromJson(await _request(
+          'GET', '/groups/${Uri.encodeComponent(groupId)}/messages'))
+          .map(HumanGroupMessage.fromJson).toList(growable: false);
+
+  @override
+  Future<HumanGroupMessage> sendHumanGroupMessage(
+      String groupId, String content, String clientMessageId) async =>
+      HumanGroupMessage.fromJson(mapFromJson(await _request(
+          'POST', '/groups/${Uri.encodeComponent(groupId)}/messages',
+          body: {'content': content, 'client_message_id': clientMessageId}))!);
+
+  @override
+  Future<void> leaveHumanGroup(String groupId) async {
+    await _request('POST', '/groups/${Uri.encodeComponent(groupId)}/leave');
+  }
+
+  @override
+  Future<void> closeHumanGroup(String groupId) async {
+    await _request('POST', '/groups/${Uri.encodeComponent(groupId)}/close');
+  }
+
+  @override
+  Future<void> reportHumanGroup(String groupId, String reason) async {
+    await _request('POST', '/groups/${Uri.encodeComponent(groupId)}/reports',
+        body: {'reason': reason});
+  }
+
+  @override
+  Future<void> blockHumanGroupInvitations(String accountId) async {
+    await _request('POST', '/groups/blocks', body: {'account_id': accountId});
+  }
 
   Future<bool?> readDemoMode() async {
     final body = await _request('GET', '/health');
