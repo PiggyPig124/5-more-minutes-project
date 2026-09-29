@@ -45,6 +45,7 @@ def initialize_database(engine: Engine) -> None:
     # Importing models before create_all registers every table on Base.metadata.
     from . import models  # noqa: F401
     from . import collaboration_models  # noqa: F401
+    from . import group_models  # noqa: F401
     from . import memory_models, resource_models  # noqa: F401
 
     if engine.dialect.name == "postgresql":
