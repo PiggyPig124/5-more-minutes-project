@@ -178,8 +178,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final _draft = TextEditingController();
   List<HumanGroupMessage> _messages = const [];
   List<HumanGroupMember> _members = const [];
-  Timer? _poll;
+  StreamSubscription<HumanGroupLiveEvent>? _liveSubscription;
+  Timer? _fallbackRefresh;
+  Future<void>? _loading;
+  bool _reloadQueued = false;
   bool _sending = false;
+  bool _manuallyLeaving = false;
+  bool _accessRevoked = false;
   String? _error;
   String? _retryId;
 
@@ -188,21 +193,91 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   @override
   void initState() {
     super.initState();
-    Future<void>.microtask(_load);
-    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
+    _liveSubscription = widget.api.watchHumanGroupMessages(widget.group.id).listen(
+      _onLiveEvent,
+    );
+    unawaited(_load());
   }
 
   @override
   void dispose() {
-    _poll?.cancel();
+    _fallbackRefresh?.cancel();
+    unawaited(_liveSubscription?.cancel());
     _draft.dispose();
     super.dispose();
   }
 
+  void _onLiveEvent(HumanGroupLiveEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case HumanGroupLiveEventType.connected:
+        _fallbackRefresh?.cancel();
+        _fallbackRefresh = null;
+        unawaited(_load(silent: true));
+        break;
+      case HumanGroupLiveEventType.messagesChanged:
+        unawaited(_load(silent: true));
+        break;
+      case HumanGroupLiveEventType.reconnecting:
+        if (_fallbackRefresh == null) {
+          // Some proxies block WebSockets. Keep the chat usable with a modest
+          // history refresh only while the live connection is unavailable.
+          unawaited(_load(silent: true));
+          _fallbackRefresh = Timer.periodic(
+            const Duration(seconds: 30),
+            (_) => unawaited(_load(silent: true)),
+          );
+        }
+        break;
+      case HumanGroupLiveEventType.accessRevoked:
+        _handleAccessRevoked();
+        break;
+    }
+  }
+
+  void _handleAccessRevoked() {
+    if (!mounted || _accessRevoked) return;
+    _accessRevoked = true;
+    _fallbackRefresh?.cancel();
+    _fallbackRefresh = null;
+    unawaited(_liveSubscription?.cancel());
+    _liveSubscription = null;
+    if (_manuallyLeaving) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr(context, '這個群組已關閉，或你已不再是成員。',
+          'This group is closed or you are no longer a member.')),
+    ));
+    Navigator.of(context).maybePop();
+  }
+
   Future<void> _load({bool silent = false}) async {
+    final activeLoad = _loading;
+    if (activeLoad != null) {
+      _reloadQueued = true;
+      await activeLoad;
+      return;
+    }
+    final load = _loadOnce(silent: silent);
+    _loading = load;
     try {
-      final messages = await widget.api.listHumanGroupMessages(widget.group.id);
-      final members = await widget.api.listHumanGroupMembers(widget.group.id);
+      await load;
+    } finally {
+      if (identical(_loading, load)) {
+        _loading = null;
+        if (_reloadQueued && mounted) {
+          _reloadQueued = false;
+          unawaited(_load(silent: true));
+        }
+      }
+    }
+  }
+
+  Future<void> _loadOnce({required bool silent}) async {
+    try {
+      final messagesFuture = widget.api.listHumanGroupMessages(widget.group.id);
+      final membersFuture = widget.api.listHumanGroupMembers(widget.group.id);
+      final messages = await messagesFuture;
+      final members = await membersFuture;
       if (!mounted) return;
       setState(() {
         _messages = messages;
@@ -210,7 +285,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         if (!silent) _error = null;
       });
     } catch (error) {
-      if (mounted && !silent) setState(() => _error = error.toString());
+      if (error is ApiException &&
+          const {401, 403, 404}.contains(error.statusCode)) {
+        _handleAccessRevoked();
+      } else if (mounted && !silent) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 
@@ -225,7 +305,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       _retryId = null;
       await _load();
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (error is ApiException &&
+          const {401, 403, 404}.contains(error.statusCode)) {
+        _handleAccessRevoked();
+      } else if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -296,6 +381,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           ],
         ));
     if (confirmed != true) return;
+    _manuallyLeaving = true;
     try {
       if (_isOwner) {
         await widget.api.closeHumanGroup(widget.group.id);
@@ -304,7 +390,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       }
       if (mounted) Navigator.pop(context);
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      _manuallyLeaving = false;
+      if (error is ApiException &&
+          const {401, 403, 404}.contains(error.statusCode)) {
+        _handleAccessRevoked();
+      } else if (mounted) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 

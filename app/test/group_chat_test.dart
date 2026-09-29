@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:anxin_companion/src/api_client.dart';
 import 'package:anxin_companion/src/group_chat.dart';
+import 'package:anxin_companion/src/group_models.dart';
 import 'package:anxin_companion/src/localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -71,4 +73,85 @@ void main() {
     expect(find.textContaining('AI 不會閱讀或回覆群訊息'), findsOneWidget);
     expect(find.text('我的群組'), findsOneWidget);
   });
+
+  testWidgets('open group reloads new and missed messages from live events',
+      (tester) async {
+    final api = _LiveHumanGroupApi();
+    api.messages = [
+      const HumanGroupMessage(
+        id: 'm1', groupId: 'g1', senderId: 'a1', senderName: 'Alice',
+        ordinal: 1, content: 'First message',
+      ),
+    ];
+    await tester.pumpWidget(MaterialApp(
+      locale: traditionalChineseLocale,
+      supportedLocales: appSupportedLocales,
+      localizationsDelegates: appLocalizationsDelegates,
+      home: GroupDetailScreen(
+        api: api,
+        group: const HumanGroup(
+          id: 'g1', title: 'Recipes', ownerId: 'a1', ownerName: 'Alice',
+          memberCount: 1,
+        ),
+        accountId: 'a1',
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('First message'), findsOneWidget);
+
+    api.messages = [
+      ...api.messages,
+      const HumanGroupMessage(
+        id: 'm2', groupId: 'g1', senderId: 'a2', senderName: 'Bob',
+        ordinal: 2, content: 'Arrived while connected',
+      ),
+    ];
+    api.events.add(const HumanGroupLiveEvent(
+        HumanGroupLiveEventType.messagesChanged));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('Arrived while connected'), findsOneWidget);
+
+    api.messages = [
+      ...api.messages,
+      const HumanGroupMessage(
+        id: 'm3', groupId: 'g1', senderId: 'a2', senderName: 'Bob',
+        ordinal: 3, content: 'Arrived while offline',
+      ),
+    ];
+    api.events.add(const HumanGroupLiveEvent(
+        HumanGroupLiveEventType.reconnecting));
+    api.events.add(const HumanGroupLiveEvent(
+        HumanGroupLiveEventType.connected));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('Arrived while offline'), findsOneWidget);
+    expect(api.messageLoads, greaterThanOrEqualTo(3));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await api.events.close();
+  });
+}
+
+class _LiveHumanGroupApi implements HumanGroupApi {
+  final events = StreamController<HumanGroupLiveEvent>.broadcast();
+  List<HumanGroupMessage> messages = const [];
+  int messageLoads = 0;
+
+  @override
+  Stream<HumanGroupLiveEvent> watchHumanGroupMessages(String groupId) =>
+      events.stream;
+
+  @override
+  Future<List<HumanGroupMessage>> listHumanGroupMessages(String groupId) async {
+    messageLoads++;
+    return messages;
+  }
+
+  @override
+  Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId) async =>
+      const [];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

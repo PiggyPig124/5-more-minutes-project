@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings
 from .db import initialize_database, make_engine, make_session_factory
+from .group_realtime import GroupRealtimeHub
 from .orchestrator import ConversationOrchestrator
 from .routers import actions, auth, conversations, family, tasks
 from .routers import family_messages, groups
@@ -34,6 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
+    app.state.group_realtime = GroupRealtimeHub()
     app.state.orchestrator = ConversationOrchestrator(settings)
 
     # Flutter's local development client runs on a different origin. A

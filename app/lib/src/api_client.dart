@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'models.dart';
 import 'group_models.dart';
@@ -149,6 +150,7 @@ abstract interface class HumanGroupApi {
   Future<void> declineHumanGroupInvitation(String invitationId);
   Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId);
   Future<List<HumanGroupMessage>> listHumanGroupMessages(String groupId);
+  Stream<HumanGroupLiveEvent> watchHumanGroupMessages(String groupId);
   Future<HumanGroupMessage> sendHumanGroupMessage(
       String groupId, String content, String clientMessageId);
   Future<void> leaveHumanGroup(String groupId);
@@ -217,6 +219,166 @@ class RestApiClient implements AnxinApi, HumanGroupApi {
           .map(HumanGroupMessage.fromJson).toList(growable: false);
 
   @override
+  Stream<HumanGroupLiveEvent> watchHumanGroupMessages(String groupId) {
+    late final StreamController<HumanGroupLiveEvent> controller;
+    bool cancelled = false;
+    WebSocketChannel? activeChannel;
+    StreamSubscription<dynamic>? activeSubscription;
+    Completer<int?>? activeClosed;
+    Completer<void>? retryWake;
+
+    Future<void> reconnect() async {
+      var retryDelay = const Duration(seconds: 1);
+      while (!cancelled) {
+        final token = accessToken;
+        if (token == null || token.isEmpty) {
+          controller.add(const HumanGroupLiveEvent(
+              HumanGroupLiveEventType.accessRevoked));
+          await controller.close();
+          return;
+        }
+
+        WebSocketChannel? channel;
+        Completer<int?>? disconnected;
+        try {
+          final openedChannel = WebSocketChannel.connect(_liveUri(groupId));
+          channel = openedChannel;
+          activeChannel = openedChannel;
+          final authenticated = Completer<void>();
+          final disconnectedAttempt = Completer<int?>();
+          disconnected = disconnectedAttempt;
+          activeClosed = disconnectedAttempt;
+          var isAuthenticated = false;
+
+          await openedChannel.ready.timeout(const Duration(seconds: 10));
+          if (cancelled) break;
+          activeSubscription = openedChannel.stream.listen((dynamic frame) {
+            if (frame is! String) return;
+            try {
+              final decoded = jsonDecode(frame);
+              if (decoded is! Map<String, dynamic>) return;
+              switch (decoded['type']) {
+                case 'ready':
+                  isAuthenticated = true;
+                  if (!authenticated.isCompleted) authenticated.complete();
+                  break;
+                case 'messages_changed':
+                  if (isAuthenticated && !controller.isClosed) {
+                    controller.add(const HumanGroupLiveEvent(
+                        HumanGroupLiveEventType.messagesChanged));
+                  }
+                  break;
+                case 'access_revoked':
+                  openedChannel.sink.close(4404, 'Group access ended');
+                  break;
+                default:
+                  break;
+              }
+            } on FormatException {
+              // Ignore malformed notification frames; history remains canonical.
+            }
+          }, onError: (Object error, StackTrace stackTrace) {
+            if (!authenticated.isCompleted) {
+              authenticated.completeError(error, stackTrace);
+            }
+            if (!disconnectedAttempt.isCompleted) {
+              disconnectedAttempt.complete(openedChannel.closeCode);
+            }
+          }, onDone: () {
+            if (!authenticated.isCompleted) {
+              authenticated.completeError(
+                  StateError('The group connection closed before authentication.'));
+            }
+            if (!disconnectedAttempt.isCompleted) {
+              disconnectedAttempt.complete(openedChannel.closeCode);
+            }
+          });
+          openedChannel.sink.add(jsonEncode({'type': 'auth', 'token': token}));
+          await authenticated.future.timeout(const Duration(seconds: 10));
+          if (cancelled) break;
+          controller.add(const HumanGroupLiveEvent(
+              HumanGroupLiveEventType.connected));
+          final connectedAt = DateTime.now();
+
+          final closeCode = await disconnectedAttempt.future;
+          if (_isPermanentGroupClose(closeCode)) {
+            if (!cancelled && !controller.isClosed) {
+              controller.add(const HumanGroupLiveEvent(
+                  HumanGroupLiveEventType.accessRevoked));
+              await controller.close();
+            }
+            return;
+          }
+          if (DateTime.now().difference(connectedAt) >=
+              const Duration(seconds: 30)) {
+            retryDelay = const Duration(seconds: 1);
+          }
+        } catch (_) {
+          // Authentication, membership, and missing-group closures are final.
+          // Network failures and server restarts use bounded exponential retry.
+          if (_isPermanentGroupClose(channel?.closeCode)) {
+            if (!cancelled && !controller.isClosed) {
+              controller.add(const HumanGroupLiveEvent(
+                  HumanGroupLiveEventType.accessRevoked));
+              await controller.close();
+            }
+            return;
+          }
+        } finally {
+          await activeSubscription?.cancel();
+          activeSubscription = null;
+          if (channel != null) {
+            try {
+              await channel.sink.close();
+            } catch (_) {
+              // The peer may already have closed during the reconnect attempt.
+            }
+          }
+          if (identical(activeChannel, channel)) activeChannel = null;
+          if (identical(activeClosed, disconnected)) activeClosed = null;
+        }
+
+        if (cancelled) return;
+        if (!controller.isClosed) {
+          controller.add(const HumanGroupLiveEvent(
+              HumanGroupLiveEventType.reconnecting));
+        }
+        final wake = Completer<void>();
+        retryWake = wake;
+        await Future.any<void>([
+          Future<void>.delayed(retryDelay),
+          wake.future,
+        ]);
+        if (identical(retryWake, wake)) retryWake = null;
+        final nextDelayMs =
+            (retryDelay.inMilliseconds * 2).clamp(1000, 30000).toInt();
+        retryDelay = Duration(milliseconds: nextDelayMs);
+      }
+    }
+
+    controller = StreamController<HumanGroupLiveEvent>(
+      onListen: () => unawaited(reconnect()),
+      onCancel: () async {
+        cancelled = true;
+        final waitingToRetry = retryWake;
+        if (waitingToRetry != null && !waitingToRetry.isCompleted) {
+          waitingToRetry.complete();
+        }
+        final closed = activeClosed;
+        if (closed != null && !closed.isCompleted) closed.complete(1000);
+        await activeSubscription?.cancel();
+        activeSubscription = null;
+        try {
+          await activeChannel?.sink.close();
+        } catch (_) {
+          // The channel can finish at the same time as the screen is disposed.
+        }
+      },
+    );
+    return controller.stream;
+  }
+
+  @override
   Future<HumanGroupMessage> sendHumanGroupMessage(
       String groupId, String content, String clientMessageId) async =>
       HumanGroupMessage.fromJson(mapFromJson(await _request(
@@ -267,6 +429,20 @@ class RestApiClient implements AnxinApi, HumanGroupApi {
   }
 
   Uri _uri(String path) => Uri.parse('$origin/${path.replaceFirst('/', '')}');
+
+  Uri _liveUri(String groupId) {
+    final uri = _uri('/groups/${Uri.encodeComponent(groupId)}/live');
+    final scheme = switch (uri.scheme) {
+      'https' => 'wss',
+      'http' => 'ws',
+      'ws' || 'wss' => uri.scheme,
+      _ => throw FormatException('Unsupported API origin scheme: ${uri.scheme}'),
+    };
+    return uri.replace(scheme: scheme, query: null, fragment: null);
+  }
+
+  static bool _isPermanentGroupClose(int? code) =>
+      code == 1008 || code == 4401 || code == 4403 || code == 4404;
 
   Map<String, String> _headers({bool jsonBody = false}) => {
         'Accept': 'application/json',

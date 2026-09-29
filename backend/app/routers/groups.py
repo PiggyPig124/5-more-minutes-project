@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -14,10 +15,13 @@ from ..db import get_db
 from ..dependencies import get_current_account
 from ..group_models import ChatGroup, GroupBlock, GroupInvitation, GroupMember, GroupMessage, GroupReport
 from ..models import Account, utc_now
+from ..security import decode_access_token
 
 router = APIRouter(prefix="/groups", tags=["human-groups"])
 INVITATION_DAYS = 7
 MAX_MEMBERS = 20
+WS_UNAUTHENTICATED = 4401
+WS_NOT_FOUND = 4404
 
 
 class CreateGroup(BaseModel):
@@ -210,7 +214,8 @@ def list_invitations(account: Account = Depends(get_current_account),
 
 
 @router.post("/invitations/{invitation_id}/accept", response_model=GroupOut)
-def accept_invitation(invitation_id: str, account: Account = Depends(get_current_account),
+def accept_invitation(invitation_id: str, request: Request,
+                      account: Account = Depends(get_current_account),
                       db: Session = Depends(get_db)) -> GroupOut:
     account_id = account.id
     _write_lock(db)
@@ -243,6 +248,7 @@ def accept_invitation(invitation_id: str, account: Account = Depends(get_current
         membership.joined_at = utc_now()
     invitation.status = "accepted"
     db.commit()
+    request.app.state.group_realtime.messages_changed(group.id)
     return _out(db, group)
 
 
@@ -335,8 +341,91 @@ def list_messages(group_id: str, account: Account = Depends(get_current_account)
     return [_message_out(db, row) for row in reversed(rows)]
 
 
+@router.websocket("/{group_id}/live")
+async def group_live(websocket: WebSocket, group_id: str) -> None:
+    """Notify a member to reload messages; never transmit private content here."""
+    await websocket.accept()
+    try:
+        auth = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+    except WebSocketDisconnect:
+        return
+    except (asyncio.TimeoutError, ValueError):
+        await websocket.close(code=WS_UNAUTHENTICATED)
+        return
+    if not isinstance(auth, dict) or auth.get("type") != "auth":
+        await websocket.close(code=WS_UNAUTHENTICATED)
+        return
+    token = auth.get("token")
+    if not isinstance(token, str):
+        await websocket.close(code=WS_UNAUTHENTICATED)
+        return
+    account_id, close_code = _live_identity(websocket, group_id, token)
+    if account_id is None:
+        await websocket.close(code=close_code or WS_NOT_FOUND)
+        return
+
+    subscriber = websocket.app.state.group_realtime.subscribe(group_id, account_id)
+
+    async def forward_events() -> None:
+        while True:
+            event = await subscriber.queue.get()
+            if event == "access_revoked":
+                await websocket.close(code=WS_NOT_FOUND)
+                return
+            await websocket.send_json({"type": event})
+
+    async def monitor_connection() -> None:
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                return
+            _, revoked_code = _live_identity(websocket, group_id, token)
+            if revoked_code is not None:
+                await websocket.close(code=revoked_code)
+                return
+
+    sender: asyncio.Task[None] | None = None
+    monitor: asyncio.Task[None] | None = None
+    try:
+        await websocket.send_json({"type": "ready"})
+        sender = asyncio.create_task(forward_events())
+        monitor = asyncio.create_task(monitor_connection())
+        # Waiting for either task means a membership revocation can finish the
+        # request immediately instead of leaving receive_text blocked for up to
+        # 30 seconds. The finally block also removes idle disconnected clients.
+        await asyncio.wait({sender, monitor}, return_when=asyncio.FIRST_COMPLETED)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        websocket.app.state.group_realtime.unsubscribe(subscriber)
+        tasks = [task for task in (sender, monitor) if task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _live_identity(websocket: WebSocket, group_id: str, token: str) -> tuple[str | None, int | None]:
+    payload = decode_access_token(token, websocket.app.state.settings.auth_secret)
+    if payload is None:
+        return None, WS_UNAUTHENTICATED
+    account_id = str(payload["sub"])
+    with websocket.app.state.session_factory() as db:
+        account = db.get(Account, account_id)
+        if account is None or not account.is_active:
+            return None, WS_UNAUTHENTICATED
+        try:
+            _member(db, group_id, account_id)
+        except HTTPException:
+            return None, WS_NOT_FOUND
+    return account_id, None
+
+
 @router.post("/{group_id}/messages", response_model=MessageOut, status_code=201)
-def send_message(group_id: str, payload: SendGroupMessage,
+def send_message(group_id: str, payload: SendGroupMessage, request: Request,
                  account: Account = Depends(get_current_account),
                  db: Session = Depends(get_db)) -> MessageOut:
     account_id = account.id
@@ -363,11 +452,13 @@ def send_message(group_id: str, payload: SendGroupMessage,
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "Message retry conflict")
+    request.app.state.group_realtime.messages_changed(group_id)
     return _message_out(db, message)
 
 
 @router.post("/{group_id}/leave", status_code=204)
-def leave_group(group_id: str, account: Account = Depends(get_current_account),
+def leave_group(group_id: str, request: Request,
+                account: Account = Depends(get_current_account),
                 db: Session = Depends(get_db)) -> None:
     account_id = account.id
     _write_lock(db)
@@ -377,10 +468,13 @@ def leave_group(group_id: str, account: Account = Depends(get_current_account),
         raise HTTPException(409, "Owner must close the group")
     membership.status = "left"
     db.commit()
+    request.app.state.group_realtime.member_left(group_id, account_id)
+    request.app.state.group_realtime.messages_changed(group_id)
 
 
 @router.post("/{group_id}/close", status_code=204)
-def close_group(group_id: str, account: Account = Depends(get_current_account),
+def close_group(group_id: str, request: Request,
+                account: Account = Depends(get_current_account),
                 db: Session = Depends(get_db)) -> None:
     account_id = account.id
     _write_lock(db)
@@ -390,6 +484,7 @@ def close_group(group_id: str, account: Account = Depends(get_current_account),
         raise HTTPException(403, "Only the owner can close the group")
     group.status = "closed"
     db.commit()
+    request.app.state.group_realtime.group_closed(group_id)
 
 
 @router.post("/{group_id}/reports", status_code=201)

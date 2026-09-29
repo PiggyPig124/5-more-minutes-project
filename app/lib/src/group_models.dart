@@ -72,3 +72,16 @@ class HumanGroupMessage {
         content: json['content'] as String? ?? '',
       );
 }
+
+enum HumanGroupLiveEventType {
+  connected,
+  messagesChanged,
+  reconnecting,
+  accessRevoked,
+}
+
+class HumanGroupLiveEvent {
+  const HumanGroupLiveEvent(this.type);
+
+  final HumanGroupLiveEventType type;
+}

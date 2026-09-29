@@ -1,6 +1,8 @@
 """Human group chat permissions, invitation boundaries, and message isolation."""
 
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+import pytest
 
 from app.main import create_app
 from .test_integration import _headers, _register, _settings
@@ -111,3 +113,47 @@ def test_invites_block_report_and_close(tmp_path):
         assert client.post(f'/groups/{group_id}/close', headers=_headers(member)).status_code == 403
         assert client.post(f'/groups/{group_id}/close', headers=_headers(owner)).status_code == 204
         assert client.get(f'/groups/{group_id}/messages', headers=_headers(member)).status_code == 404
+
+
+def test_live_group_updates_are_member_only_and_stop_after_leave(tmp_path):
+    with TestClient(create_app(_settings(tmp_path / 'group-live.db'))) as client:
+        owner = _register(client, 'live-owner@example.test')
+        member = _register(client, 'live-member@example.test')
+        outsider = _register(client, 'live-outsider@example.test')
+        group_id = _group(client, owner)
+        _accept(client, member, _invite(client, owner, group_id, 'live-member@example.test'))
+
+        with client.websocket_connect(f'/groups/{group_id}/live') as rejected:
+            rejected.send_json({'type': 'auth', 'token': outsider['access_token']})
+            with pytest.raises(WebSocketDisconnect) as denied:
+                rejected.receive_json()
+            assert denied.value.code == 4404
+
+        with client.websocket_connect(f'/groups/{group_id}/live') as invalid_token:
+            invalid_token.send_json({'type': 'auth', 'token': 'not-a-signed-token'})
+            with pytest.raises(WebSocketDisconnect) as denied:
+                invalid_token.receive_json()
+            assert denied.value.code == 4401
+
+        with client.websocket_connect(f'/groups/{group_id}/live') as owner_live:
+            owner_live.send_json({'type': 'auth', 'token': owner['access_token']})
+            assert owner_live.receive_json() == {'type': 'ready'}
+            with client.websocket_connect(f'/groups/{group_id}/live') as member_live:
+                member_live.send_json({'type': 'auth', 'token': member['access_token']})
+                assert member_live.receive_json() == {'type': 'ready'}
+                sent = client.post(f'/groups/{group_id}/messages', headers=_headers(owner),
+                                   json={'content': 'Arrives now', 'client_message_id': 'live-1'})
+                assert sent.status_code == 201
+                assert owner_live.receive_json() == {'type': 'messages_changed'}
+                assert member_live.receive_json() == {'type': 'messages_changed'}
+                assert client.post(f'/groups/{group_id}/leave',
+                                   headers=_headers(member)).status_code == 204
+                with pytest.raises(WebSocketDisconnect) as revoked:
+                    member_live.receive_json()
+                assert revoked.value.code == 4404
+            assert owner_live.receive_json() == {'type': 'messages_changed'}
+            assert client.post(f'/groups/{group_id}/close',
+                               headers=_headers(owner)).status_code == 204
+            with pytest.raises(WebSocketDisconnect) as closed:
+                owner_live.receive_json()
+            assert closed.value.code == 4404
