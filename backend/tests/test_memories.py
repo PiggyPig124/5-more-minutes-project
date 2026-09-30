@@ -28,7 +28,7 @@ def _headers(account: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {account['access_token']}"}
 
 
-def _register(client: TestClient, email: str, role: str = "elder") -> dict:
+def _register(client: TestClient, email: str, role: str = "elder", *, enable_memory: bool = True) -> dict:
     response = client.post(
         "/auth/register",
         json={
@@ -39,6 +39,13 @@ def _register(client: TestClient, email: str, role: str = "elder") -> dict:
         },
     )
     assert response.status_code == 201, response.text
+    if role == "elder" and enable_memory:
+        consent = client.put(
+            "/memories/consent",
+            headers=_headers(response.json()),
+            json={"enabled": True},
+        )
+        assert consent.status_code == 200, consent.text
     return response.json()
 
 

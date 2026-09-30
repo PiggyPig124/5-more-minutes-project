@@ -78,7 +78,8 @@ class AuthSession {
           ]) ??
           '',
       user: AppUser.fromJson(userJson),
-      demoMode: _bool(json, const ['demo_mode', 'demoMode', 'is_demo']) ?? false,
+      demoMode:
+          _bool(json, const ['demo_mode', 'demoMode', 'is_demo']) ?? false,
     );
   }
 
@@ -135,8 +136,8 @@ class ChatMessage {
   final Map<String, dynamic> metadata;
 
   /// The retrieval label and source excerpts returned with an assistant
-  /// response. They are informational only; saving a memory always requires
-  /// an explicit user action.
+  /// response. They are informational only; automatic preference capture is
+  /// separately marked in `autoSavedMemory` and visible to the owner.
   String? get retrievalMode => _string(metadata, const [
         'retrieval_mode',
         'retrievalMode',
@@ -156,10 +157,35 @@ class ChatMessage {
         .toList(growable: false);
   }
 
+  List<CommunitySearchSource> get communitySources => mapsFromJson(
+          metadata['community_sources'] ?? metadata['communitySources'])
+      .map(CommunitySearchSource.fromJson)
+      .toList(growable: false);
+
+  String? get communitySearchState => _string(
+      metadata, const ['community_search_state', 'communitySearchState']);
+
   String? get candidateMemoryId => _string(metadata, const [
         'candidate_memory_id',
         'candidateMemoryId',
       ]);
+
+  MemorySuggestion? get memorySuggestion {
+    final suggestion = _map(metadata['memory_suggestion']);
+    return suggestion == null ? null : MemorySuggestion.fromJson(suggestion);
+  }
+
+  MemoryRecord? get autoSavedMemory {
+    final memory =
+        _map(metadata['auto_saved_memory'] ?? metadata['autoSavedMemory']);
+    return memory == null ? null : MemoryRecord.fromJson(memory);
+  }
+
+  CommunityMemoryPrompt? get communityMemoryPrompt {
+    final prompt = _map(metadata['community_memory_prompt'] ??
+        metadata['communityMemoryPrompt']);
+    return prompt == null ? null : CommunityMemoryPrompt.fromJson(prompt);
+  }
 
   factory ChatMessage.fromJson(
     Map<String, dynamic> json, {
@@ -173,12 +199,18 @@ class ChatMessage {
             sender?.toLowerCase() == 'me');
     final resolvedMetadata = <String, dynamic>{
       ...?_map(json['metadata_json'] ?? json['metadata']),
-      if (json['retrieval_mode'] != null) 'retrieval_mode': json['retrieval_mode'],
+      if (json['retrieval_mode'] != null)
+        'retrieval_mode': json['retrieval_mode'],
       if (json['memory_retrieval_mode'] != null)
         'memory_retrieval_mode': json['memory_retrieval_mode'],
       if (json['resource_retrieval_mode'] != null)
         'resource_retrieval_mode': json['resource_retrieval_mode'],
-      if (json['memory_sources'] != null) 'memory_sources': json['memory_sources'],
+      if (json['memory_sources'] != null)
+        'memory_sources': json['memory_sources'],
+      if (json['community_sources'] != null)
+        'community_sources': json['community_sources'],
+      if (json['community_search_state'] != null)
+        'community_search_state': json['community_search_state'],
     };
     return ChatMessage(
       id: _string(json, const ['id', 'message_id', 'client_message_id']) ??
@@ -192,6 +224,33 @@ class ChatMessage {
       metadata: resolvedMetadata,
     );
   }
+}
+
+class MemorySuggestion {
+  const MemorySuggestion(
+      {required this.content,
+      required this.kind,
+      this.sourceMessageId,
+      this.topicKey,
+      this.sensitivity = 'ordinary',
+      this.requiresConfirmation = true});
+  final String content;
+  final String kind;
+  final String? sourceMessageId;
+  final String? topicKey;
+  final String sensitivity;
+  final bool requiresConfirmation;
+  factory MemorySuggestion.fromJson(Map<String, dynamic> json) =>
+      MemorySuggestion(
+        content: _string(json, const ['content']) ?? '',
+        kind: _string(json, const ['kind']) ?? 'fact',
+        sourceMessageId: _string(json, const ['source_message_id']),
+        topicKey: _string(json, const ['topic_key', 'topicKey']),
+        sensitivity: _string(json, const ['sensitivity']) ?? 'ordinary',
+        requiresConfirmation:
+            _bool(json, const ['requires_confirmation', 'requiresConfirmation']) ??
+                true,
+      );
 }
 
 enum TaskStatus {
@@ -274,7 +333,8 @@ class CareTask {
     return CareTask(
       id: _string(json, const ['id', 'task_id']) ?? '',
       title: _string(json, const ['title', 'name']) ?? '照顧事項',
-      description: _string(json, const ['description', 'details', 'content']) ?? '',
+      description:
+          _string(json, const ['description', 'details', 'content']) ?? '',
       status: TaskStatus.fromJson(json['status']),
       dueAt: _date(json, const ['due_at', 'dueAt', 'scheduled_for']),
       isShared: _bool(json, const ['is_shared', 'shared']) ?? true,
@@ -331,17 +391,21 @@ class ActionProposal {
   factory ActionProposal.fromJson(Map<String, dynamic> json) {
     final recipient = _map(json['recipient']);
     final payload = _map(json['payload']);
-    final status = (json['status'] ?? payload?['status'])?.toString().toLowerCase();
+    final status =
+        (json['status'] ?? payload?['status'])?.toString().toLowerCase();
     final source = <String, dynamic>{
       ...?payload,
       ...json,
     };
     return ActionProposal(
       id: _string(source, const ['id', 'action_id']) ?? '',
-      kind: ActionKind.fromJson(source['kind'] ?? source['type'] ?? source['action_type']),
+      kind: ActionKind.fromJson(
+          source['kind'] ?? source['type'] ?? source['action_type']),
       title: _string(source, const ['title', 'name']) ?? '需要你確認的事項',
-      description: _string(source, const ['description', 'preview', 'content']) ?? '',
-      conversationId: _string(source, const ['conversation_id', 'conversationId']),
+      description:
+          _string(source, const ['description', 'preview', 'content']) ?? '',
+      conversationId:
+          _string(source, const ['conversation_id', 'conversationId']),
       recipientLabel: _string(source, const [
             'recipient_label',
             'recipientLabel',
@@ -349,9 +413,13 @@ class ActionProposal {
           ]) ??
           _string(recipient, const ['name', 'email']),
       confirmed: _bool(source, const ['confirmed', 'is_confirmed']) ??
-          (status == 'confirmed' || status == 'executed' || status == 'completed'),
+          (status == 'confirmed' ||
+              status == 'executed' ||
+              status == 'completed'),
       dismissed: _bool(source, const ['dismissed', 'is_dismissed']) ??
-          (status == 'dismissed' || status == 'cancelled' || status == 'canceled'),
+          (status == 'dismissed' ||
+              status == 'cancelled' ||
+              status == 'canceled'),
     );
   }
 }
@@ -438,13 +506,14 @@ class FamilyInvitation {
             'invitee_email',
             'inviter_email',
           ]) ??
-          _string(counterpart, const ['email']) ?? '',
+          _string(counterpart, const ['email']) ??
+          '',
       status: InvitationStatus.fromJson(json['status']),
       name: _string(json, const [
-        'name',
-        'invitee_name',
-        'inviter_name',
-      ]) ??
+            'name',
+            'invitee_name',
+            'inviter_name',
+          ]) ??
           _string(counterpart, const ['display_name', 'name']),
       createdAt: _date(json, const ['created_at', 'createdAt']),
       token: _string(json, const ['token', 'invitation_token']),
@@ -476,6 +545,7 @@ class MemoryRecord {
     this.createdAt,
     this.updatedAt,
     this.sourceMessageId,
+    this.captureMethod = 'owner_added',
   });
 
   final String id;
@@ -486,11 +556,14 @@ class MemoryRecord {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String? sourceMessageId;
+  final String captureMethod;
 
-  bool get isCandidate => status.toLowerCase() == 'candidate' ||
+  bool get isCandidate =>
+      status.toLowerCase() == 'candidate' ||
       status.toLowerCase() == 'pending' ||
       status.isEmpty;
-  bool get isConfirmed => status.toLowerCase() == 'confirmed' ||
+  bool get isConfirmed =>
+      status.toLowerCase() == 'confirmed' ||
       status.toLowerCase() == 'active' ||
       status.toLowerCase() == 'saved';
 
@@ -507,8 +580,36 @@ class MemoryRecord {
         'source_message_id',
         'sourceMessageId',
       ]),
+      captureMethod: _string(json, const ['capture_method', 'captureMethod']) ??
+          'owner_added',
     );
   }
+}
+
+class CommunityMemoryPrompt {
+  const CommunityMemoryPrompt({
+    required this.memoryId,
+    required this.memoryContent,
+    required this.topic,
+    required this.promptZh,
+    required this.promptEn,
+  });
+
+  final String memoryId;
+  final String memoryContent;
+  final String topic;
+  final String promptZh;
+  final String promptEn;
+
+  factory CommunityMemoryPrompt.fromJson(Map<String, dynamic> json) =>
+      CommunityMemoryPrompt(
+        memoryId: _string(json, const ['memory_id', 'memoryId']) ?? '',
+        memoryContent:
+            _string(json, const ['memory_content', 'memoryContent']) ?? '',
+        topic: _string(json, const ['topic']) ?? '',
+        promptZh: _string(json, const ['prompt_zh', 'promptZh']) ?? '',
+        promptEn: _string(json, const ['prompt_en', 'promptEn']) ?? '',
+      );
 }
 
 class MemorySearchResult {
@@ -541,10 +642,219 @@ class StoryRecord {
       id: _string(json, const ['id', 'story_id']) ?? '',
       title: _string(json, const ['title', 'name']) ?? '我的故事',
       content: _string(json, const ['content', 'body', 'text']) ?? '',
-      memoryIds: _stringList(json['memory_ids'] ?? json['memoryIds']) ?? const [],
+      memoryIds:
+          _stringList(json['memory_ids'] ?? json['memoryIds']) ?? const [],
       createdAt: _date(json, const ['created_at', 'createdAt']),
     );
   }
+}
+
+class GuestSession {
+  const GuestSession({required this.id, this.expiresAt});
+  final String id;
+  final DateTime? expiresAt;
+  factory GuestSession.fromJson(Map<String, dynamic> json) => GuestSession(
+        id: _string(json, const ['session_id', 'id']) ?? '',
+        expiresAt: _date(json, const ['expires_at']),
+      );
+}
+
+class GuestReply {
+  const GuestReply(
+      {required this.content,
+      required this.mode,
+      this.expiresAt,
+      this.communitySources = const [],
+      this.communitySearchState});
+  final String content;
+  final String mode;
+  final DateTime? expiresAt;
+  final List<CommunitySearchSource> communitySources;
+  final String? communitySearchState;
+  factory GuestReply.fromJson(Map<String, dynamic> json) => GuestReply(
+        content: _string(json, const ['reply', 'content']) ?? '',
+        mode: _string(json, const ['mode']) ?? 'unknown',
+        expiresAt: _date(json, const ['expires_at']),
+        communitySources: mapsFromJson(json['community_sources'])
+            .map(CommunitySearchSource.fromJson)
+            .toList(),
+        communitySearchState: _string(json, const ['community_search_state']),
+      );
+}
+
+class CommunityActivity {
+  const CommunityActivity(
+      {required this.id,
+      required this.title,
+      this.summary = '',
+      this.organization = '',
+      this.area = '',
+      this.sourceUrl,
+      this.sourceName = '',
+      this.lastCheckedAt,
+      this.kind = '',
+      this.eventStartAt,
+      this.eventEndAt,
+      this.dateText = '',
+      this.eligibility = '',
+      this.registrationUrl,
+      this.verified = false,
+      this.availabilityNote = ''});
+  final String id,
+      title,
+      summary,
+      organization,
+      area,
+      sourceName,
+      kind,
+      eligibility;
+  final bool verified;
+  final String availabilityNote;
+  final String? sourceUrl;
+  final DateTime? lastCheckedAt;
+  final DateTime? eventStartAt, eventEndAt;
+  final String dateText;
+  final String? registrationUrl;
+  factory CommunityActivity.fromJson(Map<String, dynamic> json) =>
+      CommunityActivity(
+        id: _string(json, const ['id']) ?? '',
+        title: _string(json, const ['title']) ?? '',
+        summary: _string(json, const ['summary', 'description']) ?? '',
+        organization: _string(json, const ['organization']) ?? '',
+        area: _string(json, const ['area']) ?? '',
+        sourceUrl: _string(json, const ['source_url']),
+        sourceName: _string(json, const ['source_name']) ?? '',
+        lastCheckedAt: _date(json, const ['last_checked_at']),
+        kind: _string(json, const ['kind', 'listing_type']) ?? '',
+        eventStartAt: _date(json, const ['event_start_at']),
+        eventEndAt: _date(json, const ['event_end_at']),
+        dateText: _string(json, const ['date_text']) ?? '',
+        eligibility: _string(json, const ['eligibility']) ?? '',
+        registrationUrl: _string(json, const ['registration_url']),
+        verified: json['verified'] == true,
+        availabilityNote: _string(json, const ['availability_note']) ?? '',
+      );
+}
+
+class CommunitySearchSource {
+  const CommunitySearchSource(
+      {required this.name,
+      required this.url,
+      this.state = 'unavailable',
+      this.checkedAt,
+      this.error});
+  final String name, url, state;
+  final DateTime? checkedAt;
+  final String? error;
+  factory CommunitySearchSource.fromJson(Map<String, dynamic> json) =>
+      CommunitySearchSource(
+        name: _string(json, const ['name']) ?? '',
+        url: _string(json, const ['url']) ?? '',
+        state: _string(json, const ['state']) ?? 'unavailable',
+        checkedAt: _date(json, const ['checked_at']),
+        error: _string(json, const ['error']),
+      );
+}
+
+class CommunitySearchResult<T> {
+  const CommunitySearchResult(
+      {required this.items,
+      this.searchState = 'unavailable',
+      this.checkedAt,
+      this.sources = const [],
+      this.noResults = false,
+      this.message = ''});
+  final List<T> items;
+  final String searchState;
+  final DateTime? checkedAt;
+  final List<CommunitySearchSource> sources;
+  final bool noResults;
+  final String message;
+  factory CommunitySearchResult.fromJson(Map<String, dynamic> json,
+          T Function(Map<String, dynamic>) parseItem) =>
+      CommunitySearchResult<T>(
+        items: mapsFromJson(json['items']).map(parseItem).toList(),
+        searchState: _string(json, const ['search_state']) ?? 'unavailable',
+        checkedAt: _date(json, const ['checked_at']),
+        sources: mapsFromJson(json['sources'])
+            .map(CommunitySearchSource.fromJson)
+            .toList(),
+        noResults: json['no_results'] == true,
+        message: _string(json, const ['message']) ?? '',
+      );
+}
+
+class SkillSuggestion {
+  const SkillSuggestion(
+      {required this.id,
+      required this.suggestion,
+      required this.status,
+      this.memoryId,
+      this.reason = ''});
+  final String id, suggestion, status, reason;
+  final String? memoryId;
+  factory SkillSuggestion.fromJson(Map<String, dynamic> json) =>
+      SkillSuggestion(
+        id: _string(json, const ['id']) ?? '',
+        suggestion: _string(json, const ['suggestion', 'skill']) ?? '',
+        status: _string(json, const ['status']) ?? 'suggested',
+        memoryId: _string(json, const ['memory_id']),
+        reason: _string(json, const ['reason']) ?? '',
+      );
+}
+
+class CommunityOpportunity {
+  const CommunityOpportunity(
+      {required this.id,
+      required this.title,
+      this.summary = '',
+      this.organization = '',
+      this.area = '',
+      this.sourceUrl,
+      this.sourceName = '',
+      this.lastCheckedAt,
+      this.kind = '',
+      this.eventStartAt,
+      this.eventEndAt,
+      this.dateText = '',
+      this.eligibility = '',
+      this.registrationUrl,
+      this.verified = false,
+      this.availabilityNote = ''});
+  final String id,
+      title,
+      summary,
+      organization,
+      area,
+      sourceName,
+      eligibility,
+      kind;
+  final String? sourceUrl;
+  final DateTime? lastCheckedAt;
+  final DateTime? eventStartAt, eventEndAt;
+  final String dateText;
+  final String? registrationUrl;
+  final bool verified;
+  final String availabilityNote;
+  factory CommunityOpportunity.fromJson(Map<String, dynamic> json) =>
+      CommunityOpportunity(
+        id: _string(json, const ['id']) ?? '',
+        title: _string(json, const ['title']) ?? '',
+        summary: _string(json, const ['summary', 'description']) ?? '',
+        organization: _string(json, const ['organization']) ?? '',
+        area: _string(json, const ['area']) ?? '',
+        sourceUrl: _string(json, const ['source_url']),
+        sourceName: _string(json, const ['source_name']) ?? '',
+        lastCheckedAt: _date(json, const ['last_checked_at']),
+        kind: _string(json, const ['kind', 'listing_type']) ?? '',
+        eventStartAt: _date(json, const ['event_start_at']),
+        eventEndAt: _date(json, const ['event_end_at']),
+        dateText: _string(json, const ['date_text']) ?? '',
+        eligibility: _string(json, const ['eligibility']) ?? '',
+        registrationUrl: _string(json, const ['registration_url']),
+        verified: json['verified'] == true,
+        availabilityNote: _string(json, const ['availability_note']) ?? '',
+      );
 }
 
 class ResourceItem {
@@ -583,7 +893,8 @@ class ResourceItem {
             json['missing_information'] ?? json['missingInformation'],
           ) ??
           const [],
-      nextSteps: _stringList(json['next_steps'] ?? json['nextSteps']) ?? const [],
+      nextSteps:
+          _stringList(json['next_steps'] ?? json['nextSteps']) ?? const [],
     );
   }
 }
@@ -606,7 +917,8 @@ class ResourceConflict {
     }
     return ResourceConflict(
       title: _string(map, const ['title', 'topic', 'name']) ?? '',
-      summary: _string(map, const ['summary', 'description', 'details', 'content']) ??
+      summary: _string(
+              map, const ['summary', 'description', 'details', 'content']) ??
           '資料內容有差異',
       sources: _stringList(map['sources'] ?? map['source_urls']) ?? const [],
     );
@@ -671,15 +983,22 @@ class FamilyMessage {
 }
 
 class MemorySource {
-  const MemorySource({required this.id, required this.content});
+  const MemorySource({
+    required this.id,
+    required this.content,
+    this.captureMethod = 'owner_added',
+  });
 
   final String id;
   final String content;
+  final String captureMethod;
 
   factory MemorySource.fromJson(Map<String, dynamic> json) {
     return MemorySource(
       id: _string(json, const ['id', 'memory_id']) ?? '',
       content: _string(json, const ['content', 'excerpt', 'text']) ?? '',
+      captureMethod: _string(json, const ['capture_method', 'captureMethod']) ??
+          'owner_added',
     );
   }
 }
@@ -735,7 +1054,8 @@ DateTime? _date(Map<String, dynamic> json, List<String> keys) {
       if (parsed != null) return parsed.toLocal();
     }
     if (value is num) {
-      final millis = value > 100000000000 ? value.toInt() : value.toInt() * 1000;
+      final millis =
+          value > 100000000000 ? value.toInt() : value.toInt() * 1000;
       return DateTime.fromMillisecondsSinceEpoch(millis).toLocal();
     }
   }

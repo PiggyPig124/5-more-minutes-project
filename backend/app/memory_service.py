@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import hashlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from .memory_models import (
     MemoryEmbedding,
+    MemoryPreferenceBlock,
     MemoryRevision,
     PersonalMemory,
     Story,
@@ -28,6 +30,7 @@ from .memory_models import (
     _PgVector,
     embedding_dimensions,
 )
+from .memory_consent import memory_consent_enabled
 from .models import Account, Conversation, Message
 
 try:  # The collaboration milestone may not be installed in an isolated test.
@@ -115,7 +118,11 @@ class EmbeddingAdapter:
             return None
 
 
-def memory_to_dict(memory: PersonalMemory, score: float | None = None) -> dict[str, Any]:
+def memory_to_dict(
+    memory: PersonalMemory,
+    score: float | None = None,
+    capture_method: str = "owner_saved",
+) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": memory.id,
         "content": memory.content,
@@ -124,12 +131,24 @@ def memory_to_dict(memory: PersonalMemory, score: float | None = None) -> dict[s
         "suppressed": bool(memory.suppressed),
         "event_time": memory.event_time,
         "source_message_id": memory.source_message_id,
+        "capture_method": capture_method,
         "created_at": memory.created_at,
         "updated_at": memory.updated_at,
     }
     if score is not None:
         result["score"] = round(float(score), 6)
     return result
+
+
+def memory_capture_method(db: Session, memory: PersonalMemory) -> str:
+    """Report how a memory entered the library without exposing the source text."""
+
+    if not memory.source_message_id:
+        return "owner_added"
+    source = db.get(Message, memory.source_message_id)
+    metadata = source.metadata_json if source is not None else None
+    value = metadata.get("memory_capture_method") if isinstance(metadata, dict) else None
+    return value if value in {"agent_auto", "user_saved", "manual"} else "owner_added"
 
 
 def normalize_event_time(value: object) -> str | None:
@@ -320,6 +339,9 @@ async def retrieve_for_chat(
     ``{"items": [...], "retrieval_mode": "keyword"|"hybrid"}``.
     """
 
+    if not memory_consent_enabled(db, owner_id):
+        return {"items": [], "retrieval_mode": "disabled"}
+
     limit = max(1, min(int(limit), 20))
     if not query.strip():
         return {"items": [], "retrieval_mode": "keyword"}
@@ -348,7 +370,7 @@ async def retrieve_for_chat(
                     scored.append((score, row))
             scored.sort(key=lambda pair: (pair[0], pair[1].updated_at), reverse=True)
             return {
-                "items": [memory_to_dict(row, score) for score, row in scored[:limit]],
+                "items": [memory_to_dict(row, score, memory_capture_method(db, row)) for score, row in scored[:limit]],
                 "retrieval_mode": "hybrid_pgvector",
             }
 
@@ -395,81 +417,323 @@ async def retrieve_for_chat(
             scored.append((score, row))
     scored.sort(key=lambda pair: (pair[0], pair[1].updated_at), reverse=True)
     return {
-        "items": [memory_to_dict(row, score) for score, row in scored[:limit]],
+        "items": [memory_to_dict(row, score, memory_capture_method(db, row)) for score, row in scored[:limit]],
         "retrieval_mode": mode,
     }
 
 
-def _extract_explicit_memory(text: str) -> str | None:
-    patterns = (
-        r"^\s*(?:please\s+)?remember\s+(?:that|this)\s+(.+)$",
-        r"^\s*(?:請|请)?(?:幫我|帮我)?(?:記住|记住|記下|记下)\s*(.+)$",
-    )
-    for pattern in patterns:
-        match = re.match(pattern, text.strip(), flags=re.IGNORECASE)
-        if match:
-            value = match.group(1).strip().rstrip("。.!！")
-            return value[:10000] or None
-    return None
+# This is a write-boundary veto only. It never extracts, paraphrases, or
+# decides what a memory should say; that decision comes from the configured
+# model. The bounded deny list provides an independent guard when a provider
+# mistakenly labels clearly sensitive text as ordinary.
+_SENSITIVE_MEMORY_RE = re.compile(
+    r"政治|政黨|政党|選舉|选举|投票|宗教|信仰|性取向|同性戀|同性恋|色情|性行為|性行为|"
+    r"病歷|病史|診斷|诊断|疾病|癌症|糖尿|抑鬱|抑郁|焦慮|焦虑|藥物|药物|服藥|服药|"
+    r"財務|财务|債務|债务|收入|資產|资产|移民身份|難民|难民|族裔|種族|种族|"
+    r"\b(?:politic(?:s|al)?|religion|religious|sexual|diagnos(?:is|ed)|medical|medication|"
+    r"illness|disease|cancer|diabetes|depression|anxiety|income|debt|immigration status|ethnicity)\b",
+    re.IGNORECASE,
+)
 
 
-def _infer_kind(content: str) -> str:
-    normalized = content.casefold()
-    if any(word in normalized for word in ("prefer", "like", "喜歡", "喜欢", "偏好")):
-        return "preference"
-    if any(word in normalized for word in ("sad", "lonely", "worried", "難過", "孤單", "擔心", "內疚", "愧疚")):
-        return "emotion"
-    if any(word in normalized for word in ("is", "am", "住在", "叫做", "生日", "出生")):
-        return "fact"
-    return "experience"
+def sensitive_memory_content(*values: str | None) -> bool:
+    return any(value and _SENSITIVE_MEMORY_RE.search(value) for value in values)
 
 
-def propose_from_message(
+def _preference_key(topic_key: str) -> str:
+    return re.sub(r"[^\w\u3400-\u9fff]+", "", topic_key.casefold())
+
+
+def _preference_hash(owner_id: str, topic_key: str) -> str:
+    # This owner-scoped dedupe key is not an anonymization mechanism.
+    return hashlib.sha256(f"{owner_id}\0{_preference_key(topic_key)}".encode("utf-8")).hexdigest()
+
+
+def _block_preference_topic(
+    db: Session,
+    owner_id: str,
+    content: str,
+    reason: str,
+    topic_key: str | None = None,
+) -> None:
+    # New model-maintained memories carry a generic stable key. Content is a
+    # fallback only for legacy/manual entries that have no such key.
+    topic = (topic_key or content).strip()
+    if not topic or len(topic) > 120:
+        return
+    topic_hash = _preference_hash(owner_id, topic)
+    block = db.get(MemoryPreferenceBlock, (owner_id, topic_hash))
+    if block is None:
+        db.add(MemoryPreferenceBlock(owner_id=owner_id, topic_hash=topic_hash, reason=reason))
+    else:
+        block.reason = reason
+
+
+def _clear_preference_topic_block(
+    db: Session, owner_id: str, content: str, topic_key: str | None = None
+) -> None:
+    topic = (topic_key or content).strip()
+    if topic and len(topic) <= 120:
+        db.execute(delete(MemoryPreferenceBlock).where(
+            MemoryPreferenceBlock.owner_id == owner_id,
+            MemoryPreferenceBlock.topic_hash == _preference_hash(owner_id, topic),
+        ))
+
+
+def model_memory_context(db: Session, owner_id: str) -> list[dict[str, Any]]:
+    """Return only current, owner-scoped records the model may manage."""
+
+    rows = db.scalars(select(PersonalMemory).where(
+        PersonalMemory.owner_id == owner_id,
+        PersonalMemory.status == "confirmed",
+        PersonalMemory.suppressed.is_(False),
+        PersonalMemory.superseded_by.is_(None),
+        PersonalMemory.deleted_at.is_(None),
+        PersonalMemory.kind.in_(RETRIEVABLE_KINDS),
+    ).order_by(PersonalMemory.updated_at.desc()).limit(100)).all()
+    return [{
+        "id": row.id,
+        "content": row.content,
+        "kind": row.kind,
+        "status": row.status,
+        "topic_key": row.topic_key,
+        "capture_method": memory_capture_method(db, row),
+        "updated_at": row.updated_at.isoformat(),
+    } for row in rows]
+
+
+def apply_model_memory_actions(
     db: Session,
     owner_id: str,
     message: Message,
-    extracted: dict[str, Any] | None = None,
-) -> PersonalMemory | None:
-    """Create a candidate only from explicit save language or supplied extraction.
+    actions: list[dict[str, Any]],
+    memory_snapshot: list[dict[str, Any]],
+    source_texts: list[str],
+) -> dict[str, Any]:
+    """Apply validated, model-authored memory decisions inside the chat write.
 
-    This helper is intentionally synchronous so the conversation writer can
-    call it inside its existing transaction. The caller may subsequently call
-    ``index_memory_with_adapter`` before committing.
+    This function never derives memory content from message text. Action IDs
+    must match current owner records supplied to the model, and updates can
+    target only agent-auto preferences. The route separately rechecks the
+    owner-wide revision captured before the model call.
     """
 
-    if message.sender_id != owner_id:
+    result: dict[str, Any] = {"saved": [], "suggestion": None, "forgotten_ids": []}
+    if message.sender_id != owner_id or not memory_consent_enabled(db, owner_id):
+        return result
+    supplied = {str(item.get("id")): item for item in memory_snapshot if item.get("id")}
+
+    mutation_done = False
+    for action in actions[:3]:
+        if not isinstance(action, dict):
+            continue
+        action_type = action.get("action")
+        content = action.get("content")
+        kind = action.get("kind")
+        sensitivity = action.get("sensitivity")
+        topic_key = action.get("topic_key")
+        memory_id = action.get("memory_id")
+        evidence = action.get("evidence")
+        if not isinstance(evidence, str) or not any(evidence in source for source in source_texts):
+            continue
+
+        if action_type == "suggest":
+            if (isinstance(content, str) and content.strip() and kind in ALLOWED_KINDS
+                    and len(content) <= 500):
+                result["suggestion"] = {
+                    "content": content.strip(),
+                    "kind": kind,
+                    "source_message_id": message.id,
+                    "sensitivity": sensitivity,
+                    "requires_confirmation": True,
+                    **({"topic_key": topic_key} if isinstance(topic_key, str) and topic_key.strip() else {}),
+                }
+            continue
+
+        if action_type == "forget":
+            if mutation_done:
+                continue
+            snapshot = supplied.get(str(memory_id))
+            if snapshot is None:
+                continue
+            current = db.scalar(select(PersonalMemory).where(
+                PersonalMemory.id == str(memory_id),
+                PersonalMemory.owner_id == owner_id,
+                PersonalMemory.status == "confirmed",
+                PersonalMemory.suppressed.is_(False),
+                PersonalMemory.superseded_by.is_(None),
+                PersonalMemory.deleted_at.is_(None),
+            ))
+            if (current is None or current.content != snapshot.get("content")
+                    or current.updated_at.isoformat() != snapshot.get("updated_at")):
+                continue
+            purge_memory(db, current)
+            result["forgotten_ids"].append(str(memory_id))
+            mutation_done = True
+            continue
+
+        # Automatic writes are only for ordinary preferences. The model's
+        # sensitivity label is necessary, but the independent bounded guard
+        # below can still veto a clearly sensitive source or paraphrase.
+        if (action_type not in {"save_preference", "correct_preference"}
+                or kind != "preference" or sensitivity != "ordinary"
+                or not isinstance(content, str) or not content.strip() or len(content) > 500
+                or not isinstance(topic_key, str) or not topic_key.strip() or len(topic_key) > 120
+                or sensitive_memory_content(message.content, content)):
+            continue
+
+        clean_content = content.strip()
+        clean_topic_key = topic_key.strip()
+        topic_hash = _preference_hash(owner_id, clean_topic_key)
+        if db.get(MemoryPreferenceBlock, (owner_id, topic_hash)) is not None:
+            continue
+
+        if action_type == "correct_preference":
+            if mutation_done:
+                continue
+            snapshot = supplied.get(str(memory_id))
+            if snapshot is None or snapshot.get("capture_method") != "agent_auto":
+                continue
+            current = db.scalar(select(PersonalMemory).where(
+                PersonalMemory.id == str(memory_id),
+                PersonalMemory.owner_id == owner_id,
+                PersonalMemory.kind == "preference",
+                PersonalMemory.status == "confirmed",
+                PersonalMemory.suppressed.is_(False),
+                PersonalMemory.superseded_by.is_(None),
+                PersonalMemory.deleted_at.is_(None),
+            ))
+            if (current is None or current.content != snapshot.get("content")
+                    or current.updated_at.isoformat() != snapshot.get("updated_at")
+                    or memory_capture_method(db, current) != "agent_auto"):
+                continue
+            if current.topic_key and _preference_hash(owner_id, current.topic_key) != topic_hash:
+                _block_preference_topic(db, owner_id, current.content, "corrected", current.topic_key)
+            replacement = supersede_memory(
+                db, current, clean_content, "preference", suppressed=False,
+                topic_key=clean_topic_key,
+            )
+            replacement.status = "confirmed"
+            replacement.source_message_id = message.id
+            index_memory(db, replacement, None)
+            _mark_memory_capture(message, "agent_auto")
+            result["saved"].append(replacement)
+            mutation_done = True
+            continue
+
+        # New preference: same-key automatic or owner-curated records are
+        # deduplicated. Corrections must name the exact agent-auto record.
+        duplicate = db.scalar(select(PersonalMemory).where(
+            PersonalMemory.owner_id == owner_id,
+            PersonalMemory.kind == "preference",
+            PersonalMemory.status == "confirmed",
+            PersonalMemory.suppressed.is_(False),
+            PersonalMemory.superseded_by.is_(None),
+            PersonalMemory.deleted_at.is_(None),
+            PersonalMemory.topic_key == clean_topic_key,
+        ))
+        if duplicate is not None:
+            continue
+        if mutation_done:
+            continue
+        memory = PersonalMemory(
+            owner_id=owner_id,
+            content=clean_content,
+            kind="preference",
+            topic_key=clean_topic_key,
+            status="confirmed",
+            suppressed=False,
+            source_message_id=message.id,
+        )
+        db.add(memory)
+        db.flush()
+        _mark_memory_capture(message, "agent_auto")
+        index_memory(db, memory, None)
+        bump_memory_revision(db, owner_id)
+        result["saved"].append(memory)
+        mutation_done = True
+    return result
+
+
+def _mark_memory_capture(message: Message, method: str) -> None:
+    metadata = dict(message.metadata_json or {})
+    metadata["memory_capture_method"] = method
+    message.metadata_json = metadata
+
+
+_COMMUNITY_CONTEXT_CUE_RE = re.compile(
+    r"週末|周末|閒暇|闲暇|有空|空閒|空闲|活動|活动|節目|节目|出街|出門|出门|出去|"
+    r"有咩做|有什麼做|有甚麼做|參加|参加|興趣班|兴趣班|消遣|hobb(?:y|ies)|"
+    r"free\s+time|weekend|activities|events|things\s+to\s+do|go\s+out|join\s+in",
+    re.IGNORECASE,
+)
+_COMMUNITY_BLOCK_CONTEXT_RE = re.compile(
+    r"胸痛|心口痛|呼吸困難|呼吸困难|喘不過氣|喘不过气|流血|受傷|受伤|跌倒|急救|救命|緊急|紧急|求救|"
+    r"不舒服|發燒|发烧|疼痛|痛楚|醫療|医疗|醫生|医生|診症|诊症|藥物|药物|服藥|服药|覆診|复诊|"
+    r"很擔心|很担心|害怕|難過|难过|孤單|孤单|自殺|自杀|傷害自己|伤害自己|"
+    r"福利|津貼|津贴|補助|补助|資助|资助|照顧者支援|照顾者支援|長者中心|长者中心|"
+    r"預約|预约|提醒|待辦|待办|任務|任务|找工作|"
+    r"\b(?:chest pain|shortness of breath|can't breathe|cannot breathe|bleeding|injury|fell down|"
+    r"emergency|urgent|help me|worried|upset|lonely|suicid(?:al|e)|doctor|medical|medicine|"
+    r"medication|appointment|reminder|task|welfare|subsid(?:y|ies)|caregiver support)\b",
+    re.IGNORECASE,
+)
+
+
+def community_memory_prompt(
+    db: Session, owner_id: str, user_text: str
+) -> dict[str, str] | None:
+    """Offer a Community follow-up once per active preference, on a relevant turn.
+
+    The offer is metadata for the client, not input to a configured model and
+    does not search a provider. The user must start an approved lookup later.
+    """
+
+    if not memory_consent_enabled(db, owner_id) or _COMMUNITY_BLOCK_CONTEXT_RE.search(user_text):
         return None
-    content = _extract_explicit_memory(message.content)
-    kind: str | None = None
-    if extracted and isinstance(extracted, dict):
-        candidate = str(extracted.get("content") or extracted.get("text") or "").strip()
-        if candidate:
-            content = candidate[:10000]
-        kind_value = str(extracted.get("kind") or "").strip().lower()
-        if kind_value in ALLOWED_KINDS:
-            kind = kind_value
-    if not content:
-        return None
-    existing = db.scalar(
+    active = db.scalars(
         select(PersonalMemory).where(
             PersonalMemory.owner_id == owner_id,
-            PersonalMemory.source_message_id == message.id,
+            PersonalMemory.kind == "preference",
+            PersonalMemory.status == "confirmed",
+            PersonalMemory.suppressed.is_(False),
+            PersonalMemory.superseded_by.is_(None),
             PersonalMemory.deleted_at.is_(None),
-        )
-    )
-    if existing is not None:
-        return existing
-    memory = PersonalMemory(
-        owner_id=owner_id,
-        content=content,
-        kind=kind or _infer_kind(content),
-        status="candidate",
-        suppressed=False,
-        source_message_id=message.id,
-    )
-    db.add(memory)
-    db.flush()
-    return memory
+        ).order_by(PersonalMemory.created_at.asc())
+    ).all()
+    if not active:
+        return None
+
+    prior_assistant_messages = db.scalars(
+        select(Message)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .where(Conversation.owner_id == owner_id, Message.role == "assistant")
+    ).all()
+    prompted_ids = set()
+    for prior_message in prior_assistant_messages:
+        metadata = prior_message.metadata_json if isinstance(prior_message.metadata_json, dict) else {}
+        prompt = metadata.get("community_memory_prompt")
+        if isinstance(prompt, dict) and prompt.get("memory_id"):
+            prompted_ids.add(str(prompt["memory_id"]))
+
+    normalized_user_text = user_text.casefold()
+    context_is_relevant = bool(_COMMUNITY_CONTEXT_CUE_RE.search(user_text))
+    for memory in active:
+        if memory.id in prompted_ids:
+            continue
+        topic = (memory.topic_key or memory.content).strip()[:80]
+        if not topic:
+            continue
+        if not context_is_relevant and topic.casefold() not in normalized_user_text:
+            continue
+        return {
+            "memory_id": memory.id,
+            "memory_content": memory.content,
+            "topic": topic,
+            "prompt_zh": f"你之前提過「{topic}」；想唔想看看有沒有相關活動？",
+            "prompt_en": f"You previously mentioned “{topic}”. Would you like to see if there are related activities?",
+        }
+    return None
 
 
 def _story_ids_for_memory(db: Session, memory_id: str) -> list[str]:
@@ -546,7 +810,13 @@ def purge_stories(db: Session, story_ids: list[str]) -> list[str]:
     return story_ids
 
 
-def scrub_memory_references(db: Session, owner_id: str, memory_ids: set[str]) -> dict[str, Any]:
+def scrub_memory_references(
+    db: Session,
+    owner_id: str,
+    memory_ids: set[str],
+    *,
+    scrub_capture_provenance: bool = False,
+) -> dict[str, Any]:
     """Remove memory IDs and derived text from history and context snapshots.
 
     Source and explicitly tagged derived turns are replaced with a tombstone;
@@ -556,6 +826,17 @@ def scrub_memory_references(db: Session, owner_id: str, memory_ids: set[str]) ->
 
     if not memory_ids:
         return {"source_message_ids": [], "conversation_ids": []}
+    try:
+        from .community_models import CommunitySkill
+
+        db.execute(
+            delete(CommunitySkill).where(
+                CommunitySkill.owner_id == owner_id,
+                CommunitySkill.memory_id.in_(memory_ids),
+            )
+        )
+    except ImportError:  # pragma: no cover - optional collaboration milestone
+        pass
     memory_rows = db.scalars(
         select(PersonalMemory).where(PersonalMemory.owner_id == owner_id, PersonalMemory.id.in_(memory_ids))
     ).all()
@@ -574,6 +855,30 @@ def scrub_memory_references(db: Session, owner_id: str, memory_ids: set[str]) ->
         has_memory_reference = False
         cleaned = dict(metadata) if isinstance(metadata, dict) else {}
         if isinstance(metadata, dict):
+            auto_saved_memory = cleaned.get("auto_saved_memory")
+            if (
+                isinstance(auto_saved_memory, dict)
+                and str(auto_saved_memory.get("id") or "") in memory_ids
+            ):
+                has_memory_reference = True
+                cleaned.pop("auto_saved_memory", None)
+                changed = True
+            memory_suggestion = cleaned.get("memory_suggestion")
+            if (
+                isinstance(memory_suggestion, dict)
+                and str(memory_suggestion.get("source_message_id") or "") in source_message_ids
+            ):
+                has_memory_reference = True
+                cleaned.pop("memory_suggestion", None)
+                changed = True
+            community_prompt = cleaned.get("community_memory_prompt")
+            if (
+                isinstance(community_prompt, dict)
+                and str(community_prompt.get("memory_id") or "") in memory_ids
+            ):
+                has_memory_reference = True
+                cleaned.pop("community_memory_prompt", None)
+                changed = True
             for key in ("memory_sources", "memory_ids", "source_memory_ids"):
                 value = cleaned.get(key)
                 if isinstance(value, list):
@@ -602,6 +907,8 @@ def scrub_memory_references(db: Session, owner_id: str, memory_ids: set[str]) ->
                     changed = True
         if message.id in source_message_ids:
             message.content = "[記憶已由擁有人移除]"
+            if scrub_capture_provenance:
+                cleaned.pop("memory_capture_method", None)
             changed = True
         elif has_memory_reference:
             # A tagged turn may be a paraphrase or a question about the
@@ -680,6 +987,7 @@ def supersede_memory(
     kind: str,
     suppressed: bool = False,
     event_time: str | None = None,
+    topic_key: str | None = None,
 ) -> PersonalMemory:
     """Create a candidate replacement and retire the previous memory version."""
 
@@ -687,6 +995,7 @@ def supersede_memory(
         owner_id=memory.owner_id,
         content=content,
         kind=kind,
+        topic_key=topic_key,
         event_time=event_time,
         status="candidate",
         suppressed=suppressed,
@@ -709,11 +1018,22 @@ def purge_memory(db: Session, memory: PersonalMemory) -> dict[str, Any]:
     """Permanently purge memory content, indexes, stories, and references."""
 
     memory_ids = _memory_chain_ids(db, memory.id)
+    chain = db.scalars(
+        select(PersonalMemory).where(
+            PersonalMemory.owner_id == memory.owner_id,
+            PersonalMemory.id.in_(memory_ids),
+        )
+    ).all()
+    for prior in chain:
+        if prior.kind == "preference":
+            _block_preference_topic(db, memory.owner_id, prior.content, "deleted", prior.topic_key)
     story_ids: list[str] = []
     for memory_id in memory_ids:
         story_ids.extend(_story_ids_for_memory(db, memory_id))
     story_ids = sorted(set(story_ids))
-    scrubbed = scrub_memory_references(db, memory.owner_id, memory_ids)
+    scrubbed = scrub_memory_references(
+        db, memory.owner_id, memory_ids, scrub_capture_provenance=True
+    )
     db.execute(delete(MemoryEmbedding).where(MemoryEmbedding.memory_id.in_(memory_ids)))
     purge_stories(db, story_ids)
     db.execute(delete(PersonalMemory).where(PersonalMemory.id.in_(memory_ids)))

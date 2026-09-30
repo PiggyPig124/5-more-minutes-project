@@ -35,15 +35,19 @@ def main():
         client.token = account['access_token']
         accounts.append(account['account'])
 
+    request(elder, 'PUT', '/memories/consent', {'enabled': True})
     conversation = request(elder, 'POST', '/conversations', {}, 201)
     candidate_reply = request(elder, 'POST', f"/conversations/{conversation['id']}/messages", {
         'content': '記住我以前在大澳教書', 'client_message_id': 'save-memory',
     })
-    memory_id = candidate_reply['assistant_message']['metadata_json']['candidate_memory_id']
-    check(bool(memory_id), 'explicit save produces a review candidate')
+    suggestion = candidate_reply['assistant_message']['metadata_json']['memory_suggestion']
+    check(bool(suggestion), 'explicit remember request produces a transient review suggestion')
     result = request(elder, 'POST', '/memories/search', {'query': '大澳教書'})
     check(not result['items'], 'candidate is excluded from recall')
-    request(elder, 'POST', f'/memories/{memory_id}/confirm')
+    saved = request(elder, 'POST', '/memories/save', {
+        **suggestion, 'source_message_id': candidate_reply['user_message']['id'],
+    }, 201)
+    memory_id = saved['id']
     second = request(elder, 'POST', '/conversations', {}, 201)
     reply = request(elder, 'POST', f"/conversations/{second['id']}/messages", {'content': '你記得我在大澳教書嗎？'})
     check(any(item['id'] == memory_id for item in reply['assistant_message']['metadata_json']['memory_sources']),

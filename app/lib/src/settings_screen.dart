@@ -1,19 +1,72 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app.dart';
 import 'localization.dart';
 
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.microtask(
+        () => ref.read(appControllerProvider).loadMemoryConsent());
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final controller = ref.watch(localeControllerProvider);
+    final app = ref.watch(appControllerProvider);
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, '設定', 'Settings'))),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          if (app.isElder) ...[
+            Text(tr(context, '記憶與個人化', 'Memory and personalisation'),
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6),
+            Text(tr(
+                context,
+                '記憶預設關閉。開啟後，只有在已設定的 AI 模型可用時，安心伴才會自動保存清楚、普通的興趣；示範模式不會自動保存。其他或不確定內容若要保存，需逐項確認。你可隨時在「我的記憶」查看、修改、暫停或刪除。關閉後會停止新保存和使用記憶。',
+                'Memory is off by default. When enabled, Anxin may automatically save clear, ordinary interests only when a configured AI model is available; demo mode does not auto-save. Other or uncertain details require item-level confirmation before saving. View, edit, pause or delete memories at any time. Turning Memory off stops new saves and use of memories.')),
+            const SizedBox(height: 12),
+            Card(
+                child: SwitchListTile(
+              value: app.memoryConsentEnabled,
+              onChanged: app.loading
+                  ? null
+                  : (value) async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      final ok = await ref
+                          .read(appControllerProvider)
+                          .setMemoryConsent(value);
+                      if (mounted && !ok && app.errorMessage != null) {
+                        messenger.showSnackBar(
+                            SnackBar(content: Text(app.errorMessage!)));
+                      }
+                    },
+              title: Text(tr(context, '使用記憶功能', 'Use Memory')),
+              subtitle: Text(app.memoryConsentEnabled
+                  ? tr(context, '已開啟。AI 模型可用時，普通興趣可能自動保存；示範模式不會自動保存。其他內容需逐項確認。',
+                      'On. Ordinary interests may be saved automatically when an AI model is available; demo mode does not auto-save. Other details require item-level confirmation.')
+                  : tr(context, '已關閉。聊天內容不會成為長期記憶。',
+                      'Off. Chat content will not become long-term memory.')),
+              secondary: const Icon(Icons.bookmark_outline_rounded),
+            )),
+            if (app.errorMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(app.errorMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error))
+            ],
+            const SizedBox(height: 26),
+          ],
           Text(tr(context, '介面語言', 'Interface language'),
               style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),

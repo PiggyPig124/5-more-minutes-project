@@ -30,6 +30,7 @@ def main():
             })
             check(registered.status == 201, 'fixture account created')
             api.token = registered.body['access_token']
+            check(api.request('PUT', '/memories/consent', {'enabled': True}).status == 200, 'fixture explicitly enables memory')
             created = api.post('/memories', {'content': '我以前在大澳教書', 'kind': 'experience'})
             check(created.status == 201, 'memory candidate persisted')
             memory_id = created.body['id']

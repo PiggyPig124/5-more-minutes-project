@@ -1,7 +1,10 @@
 # Echo Progress Report
 
-**Status as of 28 September 2026**
-**Baseline:** Git commit `673342d` (20 September 2026). This report separates the previous prototype, changes in the current working tree, and work that remains open. It is a progress record, not a claim that the revised MVP is complete.
+**Update as of 30 September 2026.** Model-maintained Memory is implemented locally behind an explicit opt-in and configured text-model requirement. The model proposes structured save, suggest, correct, and forget actions; the server validates current-message evidence, ownership, current memory versions, and a bounded sensitive-content veto before writing. Demo mode never auto-saves. Memory retrieval still uses labelled keyword matching unless an embedding provider is configured; live model and embedding quality have not been tested. The default application no longer fetches either unapproved Community source. Backend tests: **48 passed**; the synthetic phase-one HTTP/restart acceptance: **34 checks passed**. Flutter tests and analysis were not rerun in this environment after these changes. Human-only realtime group chat is tracked separately in [PR #1](https://github.com/PiggyPig124/5-more-minutes-project/pull/1).
+
+The following sections retain the **28 September historical snapshot** and its earlier verification figures. They should not be read as the current implementation status where they differ from the update above. Original reference documents supplied for review remain outside this report's intended publication scope.
+
+**Historical baseline:** Git commit `673342d` (20 September 2026). This report separates the previous prototype, changes in the then-current working tree, and work that remained open.
 
 ## Product direction
 
@@ -29,7 +32,7 @@ The latest recorded verification, run on 27 September, reported **41 passing bac
 
 ## Source-rights finding and current scope decision
 
-The current code still contains an HTML scraper for the JC Volunteer Together Platform. Its [Terms of Service](https://www.jcvtplatform.hk/en/terms-conditions) restrict searching the platform through means other than provider-supported interfaces, explicitly giving scraping as an example, and restrict reuse of its content without written authorization. The second activity page is publicly readable, but permission for automated reuse has not been confirmed. **The scraper should be disabled before any external demonstration or deployment, and neither source should be presented as an authorized feed until its use is cleared.** Users can still be directed to an organization's official page. The source-rights review has been documented; disabling the running code has not yet been done.
+The code contains HTML adapters for the JC Volunteer Together Platform and a second activity page, but neither is enabled in the default application. The [JC Volunteer Together Platform Terms of Service](https://www.jcvtplatform.hk/en/terms-conditions) restrict scraping and reuse without written authorization; permission for automated reuse of the second page is also unconfirmed. **Do not enable either adapter for an external demonstration or deployment until its use is cleared.** Users can still open an organization's official page. Synthetic adapter tests remain available without contacting those sites.
 
 The team has decided to defer Cantonese speech-input testing and further community feed work for now. This does not prevent progress on the text-based, consent-controlled core experience.
 

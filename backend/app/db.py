@@ -6,6 +6,7 @@ from collections.abc import Generator
 
 from fastapi import Request
 from sqlalchemy import create_engine
+from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -45,10 +46,16 @@ def initialize_database(engine: Engine) -> None:
     # Importing models before create_all registers every table on Base.metadata.
     from . import models  # noqa: F401
     from . import collaboration_models  # noqa: F401
-    from . import memory_models, resource_models  # noqa: F401
+    from . import community_models, memory_models, resource_models  # noqa: F401
 
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
             connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
     Base.metadata.create_all(bind=engine)
+    # This project's startup schema setup predates a migration framework.
+    # Keep the one additive memory field compatible with existing databases.
+    columns = {column["name"] for column in inspect(engine).get_columns("personal_memories")}
+    if "topic_key" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE personal_memories ADD COLUMN topic_key VARCHAR(120)")

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings
+from .community_search import CommunitySearch
 from .db import initialize_database, make_engine, make_session_factory
 from .orchestrator import ConversationOrchestrator
-from .routers import actions, auth, conversations, family, tasks
+from .routers import actions, auth, community, conversations, family, guest, tasks
 from .routers import family_messages
 from .routers import memories, stories, resources
 from .resource_service import seed_resources
@@ -27,7 +29,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         initialize_database(app.state.engine)
         with app.state.session_factory() as db:
             seed_resources(db)
-        yield
+
+        async def reap_guest_sessions() -> None:
+            while True:
+                await asyncio.sleep(60)
+                guest.cleanup_expired_sessions(app.state.guest_sessions)
+
+        guest_reaper = asyncio.create_task(reap_guest_sessions())
+        try:
+            yield
+        finally:
+            guest_reaper.cancel()
+            try:
+                await guest_reaper
+            except asyncio.CancelledError:
+                pass
         app.state.engine.dispose()
 
     app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
@@ -35,6 +51,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
     app.state.orchestrator = ConversationOrchestrator(settings)
+    # Source adapters are kept for review and synthetic tests. Neither site's
+    # automated reuse has been approved, so a normal deployment fetches none.
+    app.state.community_search = CommunitySearch(providers=())
+    # Guest transcripts live only in this process and are removed after
+    # inactivity or an explicit DELETE. They never create database rows.
+    app.state.guest_sessions = {}
 
     # Flutter's local development client runs on a different origin. A
     # deployment can place the API behind a stricter gateway policy.
@@ -47,6 +69,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(auth.router)
+    app.include_router(guest.router)
+    app.include_router(community.router)
     app.include_router(family.router)
     app.include_router(family_messages.router)
     app.include_router(memories.router)
