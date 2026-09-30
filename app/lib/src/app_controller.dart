@@ -27,8 +27,31 @@ class AppController extends ChangeNotifier {
   List<StoryRecord> stories = const [];
   List<ResourceItem> resourceItems = const [];
   List<ResourceConflict> resourceConflicts = const [];
+  List<ResourceItem> guestHelpResources = const [];
+  String? guestHelpRetrievalMode;
   String? resourceRetrievalMode;
   List<FamilyMessage> familyMessages = const [];
+  bool memoryConsentEnabled = false;
+  GuestSession? guestSession;
+  final List<(String, bool)> guestMessages = <(String, bool)>[];
+  final Map<int, Map<String, dynamic>> guestMessageMetadata = {};
+  final Set<String> savingMemorySuggestionIds = <String>{};
+  final Set<String> savedMemorySuggestionIds = <String>{};
+  List<CommunityActivity> communityActivities = const [];
+  List<CommunityOpportunity> opportunities = const [];
+  List<CommunitySearchSource> opportunitySources = const [];
+  String opportunitySearchState = 'unavailable';
+  DateTime? opportunityCheckedAt;
+  String opportunitySearchMessage = '';
+  List<SkillSuggestion> skillSuggestions = const [];
+  List<CommunitySearchSource> communitySources = const [];
+  String communitySearchState = 'unavailable';
+  String communitySearchMessage = '';
+  DateTime? communityCheckedAt;
+  bool communitySearchLoading = false;
+  String communityTopic = '';
+  String communityArea = '';
+  bool communityNoResults = false;
   final Map<String, String> drafts = {};
   final List<ActionProposal> pendingActions = [];
   final Set<String> sendingConversationIds = <String>{};
@@ -44,6 +67,8 @@ class AppController extends ChangeNotifier {
   final Map<String, String> _actionClientIds = <String, String>{};
   Future<void>? _initialization;
   int _sessionGeneration = 0;
+  int _guestGeneration = 0;
+  int _communityGeneration = 0;
 
   bool get isSignedIn => session != null;
   AppUser? get user => session?.user;
@@ -52,7 +77,8 @@ class AppController extends ChangeNotifier {
 
   bool get _canUseFamilyMessages => links.any(
         (link) =>
-            link.status == InvitationStatus.accepted && link.allowsFamilyMessages,
+            link.status == InvitationStatus.accepted &&
+            link.allowsFamilyMessages,
       );
 
   /// Active links with the family_messages grant are the only valid message
@@ -61,7 +87,8 @@ class AppController extends ChangeNotifier {
   List<FamilyInvitation> get familyMessageLinks => links
       .where(
         (link) =>
-            link.status == InvitationStatus.accepted && link.allowsFamilyMessages,
+            link.status == InvitationStatus.accepted &&
+            link.allowsFamilyMessages,
       )
       .toList(growable: false);
 
@@ -132,7 +159,9 @@ class AppController extends ChangeNotifier {
     if (restApi is! RestApiClient || session == null) return;
     try {
       final mode = await restApi.readDemoMode();
-      if (mode == null || generation != _sessionGeneration || session == null) return;
+      if (mode == null || generation != _sessionGeneration || session == null) {
+        return;
+      }
       if (session!.demoMode != mode) {
         session = AuthSession(
           accessToken: session!.accessToken,
@@ -153,7 +182,8 @@ class AppController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final nextSession = await api.login(email: email.trim(), password: password);
+      final nextSession =
+          await api.login(email: email.trim(), password: password);
       await _setSession(nextSession);
       await _refreshDemoMode(_sessionGeneration);
       await refreshHome(silent: true);
@@ -197,6 +227,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _setSession(AuthSession nextSession) async {
+    if (guestSession != null) await endGuestSession();
     _sessionGeneration += 1;
     session = nextSession;
     _syncToken();
@@ -206,6 +237,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    await endGuestSession();
     _sessionGeneration += 1;
     loading = true;
     notifyListeners();
@@ -224,6 +256,7 @@ class AppController extends ChangeNotifier {
       invitations = const [];
       links = const [];
       memories = const [];
+      memoryConsentEnabled = false;
       memorySearchResults = const [];
       memoryRetrievalMode = null;
       stories = const [];
@@ -231,6 +264,20 @@ class AppController extends ChangeNotifier {
       resourceConflicts = const [];
       resourceRetrievalMode = null;
       familyMessages = const [];
+      skillSuggestions = const [];
+      opportunities = const [];
+      opportunitySources = const [];
+      opportunitySearchState = 'unavailable';
+      opportunityCheckedAt = null;
+      opportunitySearchMessage = '';
+      communityActivities = const [];
+      communitySources = const [];
+      communitySearchState = 'unavailable';
+      communityCheckedAt = null;
+      communitySearchMessage = '';
+      guestHelpResources = const [];
+      savingMemorySuggestionIds.clear();
+      savedMemorySuggestionIds.clear();
       pendingActions.clear();
       drafts.clear();
       _draftClientIds.clear();
@@ -251,6 +298,13 @@ class AppController extends ChangeNotifier {
       notifyListeners();
     }
     final errors = <String>[];
+    if (isElder && api is ConsentApi) {
+      try {
+        memoryConsentEnabled = await (api as ConsentApi).getMemoryConsent();
+      } on ApiException catch (error) {
+        errors.add(error.message);
+      }
+    }
     try {
       final foundation = await Future.wait<Object?>([
         api.listTasks().catchError((Object error) {
@@ -329,6 +383,384 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<bool> startGuestSession() async {
+    final guestApi = api is GuestApi ? api as GuestApi : null;
+    if (guestApi == null) {
+      errorMessage = '訪客對話服務尚未就緒。';
+      notifyListeners();
+      return false;
+    }
+    loading = true;
+    errorMessage = null;
+    notifyListeners();
+    final generation = ++_guestGeneration;
+    try {
+      final created = await guestApi.startGuestSession();
+      if (generation != _guestGeneration || session != null) {
+        await guestApi.endGuestSession(created.id);
+        return false;
+      }
+      guestSession = created;
+      guestMessages.clear();
+      guestMessageMetadata.clear();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      return false;
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> sendGuestMessage(String content) async {
+    final active = guestSession;
+    final guestApi = api is GuestApi ? api as GuestApi : null;
+    if (active == null || guestApi == null || content.trim().isEmpty) {
+      return false;
+    }
+    final generation = _guestGeneration;
+    guestMessages.add((content.trim(), true));
+    notifyListeners();
+    try {
+      final reply = await guestApi.sendGuestMessage(active.id, content.trim());
+      if (generation != _guestGeneration || guestSession?.id != active.id) {
+        return false;
+      }
+      guestMessages.add((reply.content, false));
+      if (reply.communitySources.isNotEmpty) {
+        guestMessageMetadata[guestMessages.length - 1] = {
+          'community_sources': reply.communitySources
+              .map((source) => {
+                    'name': source.name,
+                    'url': source.url,
+                    'state': source.state,
+                    if (source.checkedAt != null)
+                      'checked_at': source.checkedAt!.toIso8601String(),
+                    if (source.error != null) 'error': source.error,
+                  })
+              .toList(),
+          if (reply.communitySearchState != null)
+            'community_search_state': reply.communitySearchState,
+        };
+      }
+      if (reply.expiresAt != null) {
+        guestSession = GuestSession(id: active.id, expiresAt: reply.expiresAt);
+      }
+      errorMessage = null;
+      return true;
+    } on ApiException catch (error) {
+      if (generation == _guestGeneration && guestSession?.id == active.id) {
+        errorMessage = error.message;
+      }
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<void> endGuestSession() async {
+    final previous = guestSession;
+    ++_guestGeneration;
+    guestSession = null;
+    guestMessages.clear();
+    guestMessageMetadata.clear();
+    errorMessage = null;
+    notifyListeners();
+    if (previous != null && api is GuestApi) {
+      try {
+        await (api as GuestApi).endGuestSession(previous.id);
+      } on ApiException catch (error) {
+        errorMessage = error.message;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> setMemoryConsent(bool enabled) async {
+    if (!isElder || api is! ConsentApi) return false;
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    loading = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final updated = await (api as ConsentApi).setMemoryConsent(enabled);
+      if (generation != _sessionGeneration || user?.id != ownerId || !isElder) {
+        return false;
+      }
+      memoryConsentEnabled = updated;
+      if (!memoryConsentEnabled) {
+        skillSuggestions = const [];
+        opportunities = const [];
+        opportunitySources = const [];
+        opportunitySearchState = 'unavailable';
+        opportunityCheckedAt = null;
+        opportunitySearchMessage = '';
+        memorySearchResults = const [];
+        memoryRetrievalMode = null;
+        savingMemorySuggestionIds.clear();
+        savedMemorySuggestionIds.clear();
+      }
+      return memoryConsentEnabled == enabled;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      return false;
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadMemoryConsent() async {
+    if (!isElder || api is! ConsentApi) return;
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    try {
+      final enabled = await (api as ConsentApi).getMemoryConsent();
+      if (generation != _sessionGeneration || user?.id != ownerId || !isElder) {
+        return;
+      }
+      memoryConsentEnabled = enabled;
+      errorMessage = null;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || user?.id != ownerId) return;
+      errorMessage = error.message;
+    }
+    notifyListeners();
+  }
+
+  Future<bool> saveSuggestedMemory(ChatMessage message,
+      {String? editedContent}) async {
+    final suggestion = message.memorySuggestion;
+    if (!isElder ||
+        !memoryConsentEnabled ||
+        suggestion == null ||
+        api is! MemorySaveApi) {
+      return false;
+    }
+    final content = (editedContent ?? suggestion.content).trim();
+    if (content.isEmpty) return false;
+    if (savingMemorySuggestionIds.contains(message.id) ||
+        savedMemorySuggestionIds.contains(message.id)) {
+      return false;
+    }
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    savingMemorySuggestionIds.add(message.id);
+    notifyListeners();
+    try {
+      final saved = await (api as MemorySaveApi).saveConfirmedMemory(
+        content: content,
+        kind: suggestion.kind,
+        sourceMessageId: suggestion.sourceMessageId,
+        topicKey: content == suggestion.content ? suggestion.topicKey : null,
+      );
+      if (generation != _sessionGeneration ||
+          user?.id != ownerId ||
+          !isElder ||
+          !memoryConsentEnabled) {
+        return false;
+      }
+      savedMemorySuggestionIds.add(message.id);
+      memories = [saved, ...memories.where((item) => item.id != saved.id)];
+      errorMessage = null;
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      if (generation == _sessionGeneration && user?.id == ownerId) {
+        errorMessage = error.message;
+      }
+      return false;
+    } finally {
+      savingMemorySuggestionIds.remove(message.id);
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshCommunity({bool skills = true}) async {
+    if (api is! CommunityApi) return;
+    await searchCommunity();
+    if (skills && isElder && memoryConsentEnabled) {
+      await _refreshSkillSuggestions();
+    }
+  }
+
+  Future<void> searchCommunity({String? topic, String? area}) async {
+    if (api is! CommunityApi) return;
+    final generation = _sessionGeneration;
+    final requestId = ++_communityGeneration;
+    final ownerId = user?.id;
+    final normalizedTopic = (topic ?? communityTopic).trim();
+    final normalizedArea = (area ?? communityArea).trim();
+    communityTopic = normalizedTopic;
+    communityArea = normalizedArea;
+    communitySearchLoading = true;
+    communitySearchMessage = '';
+    notifyListeners();
+    try {
+      final result = await (api as CommunityApi).searchCommunityActivities(
+          topic: normalizedTopic.isEmpty ? null : normalizedTopic,
+          area: normalizedArea.isEmpty ? null : normalizedArea);
+      if (generation != _sessionGeneration ||
+          user?.id != ownerId ||
+          requestId != _communityGeneration) {
+        return;
+      }
+      communityActivities = result.items;
+      communitySources = result.sources;
+      communitySearchState = result.searchState;
+      communityCheckedAt = result.checkedAt;
+      communityNoResults = result.noResults || result.items.isEmpty;
+      communitySearchMessage = result.message;
+      errorMessage = null;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration ||
+          user?.id != ownerId ||
+          requestId != _communityGeneration) {
+        return;
+      }
+      communityActivities = const [];
+      communitySources = const [];
+      communitySearchState = 'unavailable';
+      communityNoResults = false;
+      communitySearchMessage = error.message;
+    } finally {
+      if (generation == _sessionGeneration &&
+          user?.id == ownerId &&
+          requestId == _communityGeneration) {
+        communitySearchLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _refreshSkillSuggestions() async {
+    if (api is! CommunityApi || !isElder || !memoryConsentEnabled) return;
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    try {
+      final results = await (api as CommunityApi).listSkillSuggestions();
+      if (generation != _sessionGeneration ||
+          user?.id != ownerId ||
+          !isElder ||
+          !memoryConsentEnabled) {
+        return;
+      }
+      skillSuggestions = results;
+      final confirmed = results.where((item) => item.status == 'confirmed');
+      final matches = <CommunityOpportunity>[];
+      final sources = <CommunitySearchSource>[];
+      var state = 'unavailable';
+      DateTime? checkedAt;
+      var message = '';
+      for (final skill in confirmed) {
+        final search =
+            await (api as CommunityApi).searchOpportunities(skill.id);
+        if (generation != _sessionGeneration ||
+            user?.id != ownerId ||
+            !isElder ||
+            !memoryConsentEnabled) {
+          return;
+        }
+        matches.addAll(search.items);
+        sources.addAll(search.sources);
+        checkedAt = search.checkedAt ?? checkedAt;
+        if (search.searchState == 'live' ||
+            (search.searchState == 'cache' && state != 'live')) {
+          state = search.searchState;
+        }
+        if (search.message.isNotEmpty) message = search.message;
+      }
+      opportunities = matches;
+      opportunitySources = sources;
+      opportunitySearchState = state;
+      opportunityCheckedAt = checkedAt;
+      opportunitySearchMessage = message;
+      errorMessage = null;
+    } on ApiException catch (error) {
+      if (generation == _sessionGeneration && user?.id == ownerId) {
+        errorMessage = error.message;
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> searchHelp(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    try {
+      final result = isSignedIn
+          ? await api.searchResources(query: trimmed, limit: 4)
+          : api is GuestResourceApi
+              ? await (api as GuestResourceApi)
+                  .searchGuestResources(query: trimmed, limit: 4)
+              : throw const ApiException('訪客資訊搜尋暫時未能使用。');
+      if (generation != _sessionGeneration || user?.id != ownerId) return;
+      guestHelpResources = result.items;
+      guestHelpRetrievalMode = result.retrievalMode;
+      errorMessage = null;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || user?.id != ownerId) return;
+      errorMessage = error.message;
+      guestHelpResources = const [];
+    }
+    notifyListeners();
+  }
+
+  Future<bool> decideSkill(SkillSuggestion suggestion,
+      {required String decision, String? skill}) async {
+    if (api is! CommunityApi || !isElder || !memoryConsentEnabled) return false;
+    final generation = _sessionGeneration;
+    final ownerId = user?.id;
+    try {
+      final result = await (api as CommunityApi)
+          .decideSkill(suggestion.id, decision: decision, skill: skill);
+      if (generation != _sessionGeneration ||
+          user?.id != ownerId ||
+          !isElder ||
+          !memoryConsentEnabled) {
+        return false;
+      }
+      skillSuggestions = [
+        for (final item in skillSuggestions)
+          if (item.id != result.id) result
+      ];
+      if (decision == 'confirm' || decision == 'edit') {
+        final matches =
+            await (api as CommunityApi).searchOpportunities(result.id);
+        if (generation != _sessionGeneration ||
+            user?.id != ownerId ||
+            !isElder ||
+            !memoryConsentEnabled) {
+          return false;
+        }
+        opportunities = matches.items;
+        opportunitySources = matches.sources;
+        opportunitySearchState = matches.searchState;
+        opportunityCheckedAt = matches.checkedAt;
+        opportunitySearchMessage = matches.message;
+      } else if (decision == 'reject') {
+        opportunities = const [];
+        opportunitySources = const [];
+        opportunitySearchState = 'unavailable';
+        opportunityCheckedAt = null;
+        opportunitySearchMessage = '';
+      }
+      errorMessage = null;
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      if (generation == _sessionGeneration && user?.id == ownerId) {
+        errorMessage = error.message;
+      }
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> _restorePendingActions(
     List<Conversation> restoredConversations,
     int generation,
@@ -363,7 +795,8 @@ class AppController extends ChangeNotifier {
       final conversation = await api.createConversation();
       if (generation != _sessionGeneration || session == null) return null;
       conversations = [conversation, ...conversations];
-      messagesByConversation.putIfAbsent(conversation.id, () => <ChatMessage>[]);
+      messagesByConversation.putIfAbsent(
+          conversation.id, () => <ChatMessage>[]);
       notifyListeners();
       return conversation;
     } on ApiException catch (error) {
@@ -385,7 +818,9 @@ class AppController extends ChangeNotifier {
       if (generation != _sessionGeneration || session == null) return;
       messagesByConversation[conversationId] = loadedMessages;
       for (final action in loadedActions) {
-        if (!pendingActions.any((item) => item.id == action.id)) pendingActions.add(action);
+        if (!pendingActions.any((item) => item.id == action.id)) {
+          pendingActions.add(action);
+        }
       }
     } on ApiException catch (error) {
       errorMessage = error.message;
@@ -400,10 +835,14 @@ class AppController extends ChangeNotifier {
 
   Future<String?> readDraft(String conversationId) async {
     if (drafts.containsKey(conversationId)) return drafts[conversationId];
-    final value = await sessionStore.readDraft(conversationId, userId: user?.id);
+    final value =
+        await sessionStore.readDraft(conversationId, userId: user?.id);
     if (value != null) drafts[conversationId] = value;
-    final clientId = await sessionStore.readDraftClientId(conversationId, userId: user?.id);
-    if (clientId != null && clientId.isNotEmpty) _draftClientIds[conversationId] = clientId;
+    final clientId =
+        await sessionStore.readDraftClientId(conversationId, userId: user?.id);
+    if (clientId != null && clientId.isNotEmpty) {
+      _draftClientIds[conversationId] = clientId;
+    }
     return value;
   }
 
@@ -421,7 +860,8 @@ class AppController extends ChangeNotifier {
     if (previous != draft || !_draftClientIds.containsKey(conversationId)) {
       final clientId = _newClientId('message-draft');
       _draftClientIds[conversationId] = clientId;
-      await sessionStore.saveDraftClientId(conversationId, clientId, userId: user?.id);
+      await sessionStore.saveDraftClientId(conversationId, clientId,
+          userId: user?.id);
     }
     await sessionStore.saveDraft(conversationId, draft, userId: user?.id);
     notifyListeners();
@@ -431,7 +871,9 @@ class AppController extends ChangeNotifier {
     required String conversationId,
     required String content,
   }) async {
-    if (!isElder || content.trim().isEmpty || sendingConversationIds.contains(conversationId)) {
+    if (!isElder ||
+        content.trim().isEmpty ||
+        sendingConversationIds.contains(conversationId)) {
       return false;
     }
     final trimmed = content.trim();
@@ -460,7 +902,9 @@ class AppController extends ChangeNotifier {
             isFromUser: true,
             createdAt: DateTime.now(),
           );
-      if (!existing.any((message) => message.id == userMessage.id)) existing.add(userMessage);
+      if (!existing.any((message) => message.id == userMessage.id)) {
+        existing.add(userMessage);
+      }
       final assistantMessage = result.assistantMessage;
       if (assistantMessage != null &&
           !existing.any((message) => message.id == assistantMessage.id)) {
@@ -482,7 +926,8 @@ class AppController extends ChangeNotifier {
       // An explicit "記住" request can create a server-side candidate. The
       // candidate remains unconfirmed; refreshing it here only makes the
       // review card available immediately after the chat response.
-      if (assistantMessage?.candidateMemoryId != null) {
+      if (assistantMessage?.candidateMemoryId != null ||
+          assistantMessage?.autoSavedMemory != null) {
         try {
           final refreshedMemories = await api.listMemories();
           if (generation == _sessionGeneration && session != null) {
@@ -620,7 +1065,8 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<bool> acceptInvitation(FamilyInvitation invitation, {String? token}) async {
+  Future<bool> acceptInvitation(FamilyInvitation invitation,
+      {String? token}) async {
     final invitationToken = (token ?? invitation.token ?? '').trim();
     if (invitationToken.isEmpty) {
       errorMessage = '請輸入邀請碼，服務才可以確認這個連結。';
@@ -637,7 +1083,10 @@ class AppController extends ChangeNotifier {
         token: invitationToken,
       );
       if (generation != _sessionGeneration || session == null) return false;
-      invitations = [for (final item in invitations) if (item.id != invitation.id && item.id != accepted.id) item];
+      invitations = [
+        for (final item in invitations)
+          if (item.id != invitation.id && item.id != accepted.id) item
+      ];
       links = [accepted, ...links.where((item) => item.id != accepted.id)];
       notifyListeners();
       return true;
@@ -682,7 +1131,10 @@ class AppController extends ChangeNotifier {
           else
             item,
       ];
-      links = [for (final item in links) if (item.id != invitation.id) item];
+      links = [
+        for (final item in links)
+          if (item.id != invitation.id) item
+      ];
       notifyListeners();
       return true;
     } on ApiException catch (error) {
@@ -756,7 +1208,10 @@ class AppController extends ChangeNotifier {
         sourceMessageId: sourceMessageId,
       );
       if (generation != _sessionGeneration || session == null) return false;
-      memories = [created, ...memories.where((memory) => memory.id != created.id)];
+      memories = [
+        created,
+        ...memories.where((memory) => memory.id != created.id)
+      ];
       memorySearchResults = [
         for (final memory in memorySearchResults)
           if (memory.id != created.id) memory,
@@ -814,7 +1269,10 @@ class AppController extends ChangeNotifier {
     try {
       await api.deleteMemory(memory.id);
       if (generation != _sessionGeneration || session == null) return false;
-      memories = [for (final item in memories) if (item.id != memory.id) item];
+      memories = [
+        for (final item in memories)
+          if (item.id != memory.id) item
+      ];
       memorySearchResults = [
         for (final item in memorySearchResults)
           if (item.id != memory.id) item,
@@ -864,7 +1322,8 @@ class AppController extends ChangeNotifier {
       stories = [
         for (final story in stories)
           if (!story.memoryIds.contains(memoryId) &&
-              !story.memoryIds.contains(updated.id)) story,
+              !story.memoryIds.contains(updated.id))
+            story,
       ];
       notifyListeners();
       return true;
@@ -907,7 +1366,9 @@ class AppController extends ChangeNotifier {
     required String content,
     List<String> memoryIds = const [],
   }) async {
-    if (!isElder || title.trim().isEmpty || content.trim().isEmpty) return false;
+    if (!isElder || title.trim().isEmpty || content.trim().isEmpty) {
+      return false;
+    }
     final generation = _sessionGeneration;
     loading = true;
     errorMessage = null;
@@ -941,7 +1402,10 @@ class AppController extends ChangeNotifier {
     try {
       await api.deleteStory(story.id);
       if (generation != _sessionGeneration || session == null) return false;
-      stories = [for (final item in stories) if (item.id != story.id) item];
+      stories = [
+        for (final item in stories)
+          if (item.id != story.id) item
+      ];
       notifyListeners();
       return true;
     } on ApiException catch (error) {

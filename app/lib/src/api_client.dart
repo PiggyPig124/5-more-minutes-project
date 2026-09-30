@@ -126,6 +126,44 @@ abstract class AnxinApi {
   });
 }
 
+/// Optional release features. Kept separate so existing test doubles and
+/// alternate API implementations can continue to focus on the core contract.
+abstract interface class GuestApi {
+  Future<GuestSession> startGuestSession();
+  Future<GuestReply> sendGuestMessage(String sessionId, String content);
+  Future<void> endGuestSession(String sessionId);
+}
+
+abstract interface class ConsentApi {
+  Future<bool> getMemoryConsent();
+  Future<bool> setMemoryConsent(bool enabled);
+}
+
+abstract interface class MemorySaveApi {
+  Future<MemoryRecord> saveConfirmedMemory(
+      {required String content,
+      required String kind,
+      String? sourceMessageId,
+      String? topicKey});
+}
+
+abstract interface class GuestResourceApi {
+  Future<ResourceSearchResult> searchGuestResources(
+      {required String query, int? limit});
+}
+
+abstract interface class CommunityApi {
+  Future<List<CommunityActivity>> listCommunityActivities();
+  Future<CommunitySearchResult<CommunityActivity>> searchCommunityActivities(
+      {String? topic, String? area});
+  Future<List<SkillSuggestion>> listSkillSuggestions();
+  Future<SkillSuggestion> decideSkill(String id,
+      {required String decision, String? skill});
+  Future<List<CommunityOpportunity>> listOpportunities(String skillId);
+  Future<CommunitySearchResult<CommunityOpportunity>> searchOpportunities(
+      String skillId);
+}
+
 class ApiException implements Exception {
   const ApiException(this.message, {this.statusCode, this.cause});
 
@@ -139,7 +177,14 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-class RestApiClient implements AnxinApi {
+class RestApiClient
+    implements
+        AnxinApi,
+        GuestApi,
+        ConsentApi,
+        CommunityApi,
+        MemorySaveApi,
+        GuestResourceApi {
   RestApiClient({
     String? origin,
     http.Client? client,
@@ -168,6 +213,150 @@ class RestApiClient implements AnxinApi {
     final configured = map['model_configured'];
     if (configured is bool) return !configured;
     return null;
+  }
+
+  @override
+  Future<GuestSession> startGuestSession() async {
+    final body = await _request('POST', '/guest/sessions', body: const {});
+    final map = mapFromJson(body);
+    if (map == null) throw const ApiException('服務未回覆訪客對話資料。');
+    final session = GuestSession.fromJson(map);
+    if (session.id.isEmpty) throw const ApiException('服務未回覆訪客對話編號。');
+    return session;
+  }
+
+  @override
+  Future<GuestReply> sendGuestMessage(String sessionId, String content) async {
+    final body = await _request(
+      'POST',
+      '/guest/sessions/${Uri.encodeComponent(sessionId)}/messages',
+      body: {'content': content},
+    );
+    final map = mapFromJson(body);
+    if (map == null) throw const ApiException('服務未回覆對話內容。');
+    final reply = GuestReply.fromJson(map);
+    if (reply.content.isEmpty) throw const ApiException('服務未回覆對話內容。');
+    return reply;
+  }
+
+  @override
+  Future<void> endGuestSession(String sessionId) async {
+    await _request(
+        'DELETE', '/guest/sessions/${Uri.encodeComponent(sessionId)}');
+  }
+
+  @override
+  Future<ResourceSearchResult> searchGuestResources(
+      {required String query, int? limit}) async {
+    final params = <String, String>{
+      'query': query,
+      if (limit != null) 'limit': '$limit'
+    };
+    final map = mapFromJson(await _request('GET',
+            '/guest/resources/search?${Uri(queryParameters: params).query}')) ??
+        const <String, dynamic>{};
+    final rawConflicts = map['conflicts'] ?? map['resource_conflicts'];
+    return ResourceSearchResult(
+      query: _stringValue(map, const ['query']) ?? query,
+      retrievalMode: _stringValue(map, const ['retrieval_mode', 'mode']),
+      items: mapsFromJson(map['items']).map(ResourceItem.fromJson).toList(),
+      conflicts: rawConflicts is List
+          ? rawConflicts.map(ResourceConflict.fromJson).toList()
+          : const [],
+    );
+  }
+
+  @override
+  Future<bool> getMemoryConsent() async {
+    final map = mapFromJson(await _request('GET', '/memories/consent'));
+    return map?['enabled'] == true;
+  }
+
+  @override
+  Future<bool> setMemoryConsent(bool enabled) async {
+    final map = mapFromJson(await _request(
+      'PUT',
+      '/memories/consent',
+      body: {'enabled': enabled},
+    ));
+    if (map == null || map['enabled'] is! bool) {
+      throw const ApiException('服務未確認記憶設定。');
+    }
+    return map['enabled'] as bool;
+  }
+
+  @override
+  Future<MemoryRecord> saveConfirmedMemory(
+      {required String content,
+      required String kind,
+      String? sourceMessageId,
+      String? topicKey}) async {
+    final body = await _request('POST', '/memories/save', body: {
+      'content': content,
+      'kind': kind,
+      if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
+        'source_message_id': sourceMessageId,
+      if (topicKey != null && topicKey.trim().isNotEmpty)
+        'topic_key': topicKey,
+    });
+    return _requireMemory(body);
+  }
+
+  @override
+  Future<List<CommunityActivity>> listCommunityActivities() async {
+    return (await searchCommunityActivities()).items;
+  }
+
+  @override
+  Future<CommunitySearchResult<CommunityActivity>> searchCommunityActivities(
+      {String? topic, String? area}) async {
+    final params = <String, String>{
+      if (topic != null && topic.trim().isNotEmpty) 'topic': topic.trim(),
+      if (area != null && area.trim().isNotEmpty) 'area': area.trim(),
+    };
+    final path = params.isEmpty
+        ? '/community/activities'
+        : '/community/activities?${Uri(queryParameters: params).query}';
+    final map =
+        mapFromJson(await _request('GET', path)) ?? const <String, dynamic>{};
+    return CommunitySearchResult<CommunityActivity>.fromJson(
+        map, CommunityActivity.fromJson);
+  }
+
+  @override
+  Future<List<SkillSuggestion>> listSkillSuggestions() async {
+    final map =
+        mapFromJson(await _request('GET', '/community/skills/suggestions'));
+    return mapsFromJson(map?['items']).map(SkillSuggestion.fromJson).toList();
+  }
+
+  @override
+  Future<SkillSuggestion> decideSkill(String id,
+      {required String decision, String? skill}) async {
+    final map = mapFromJson(await _request(
+      'POST',
+      '/community/skills/${Uri.encodeComponent(id)}/decision',
+      body: {'decision': decision, if (skill != null) 'skill': skill},
+    ));
+    if (map == null) throw const ApiException('服務未確認技能選擇。');
+    return SkillSuggestion.fromJson(map);
+  }
+
+  @override
+  Future<List<CommunityOpportunity>> listOpportunities(String skillId) async {
+    return (await searchOpportunities(skillId)).items;
+  }
+
+  @override
+  Future<CommunitySearchResult<CommunityOpportunity>> searchOpportunities(
+      String skillId) async {
+    final uri = Uri.parse('$origin/community/opportunities')
+        .replace(queryParameters: {'skill_id': skillId});
+    final map =
+        mapFromJson(await _request('GET', '${uri.path}?${uri.query}')) ??
+            const <String, dynamic>{};
+    return CommunitySearchResult<CommunityOpportunity>.fromJson(
+        map, CommunityOpportunity.fromJson);
   }
 
   static String _normalizeOrigin(String value) {
@@ -290,7 +479,8 @@ class RestApiClient implements AnxinApi {
     final body = await _request('GET', '/auth/me');
     final map = mapFromJson(body);
     if (map == null) throw const ApiException('服務回覆的帳戶資料不完整。');
-    return AppUser.fromJson(_mapOrEmpty(map['account']) ?? _mapOrEmpty(map['user']) ?? map);
+    return AppUser.fromJson(
+        _mapOrEmpty(map['account']) ?? _mapOrEmpty(map['user']) ?? map);
   }
 
   @override
@@ -316,7 +506,8 @@ class RestApiClient implements AnxinApi {
       '/conversations/${Uri.encodeComponent(conversationId)}/messages',
     );
     return mapsFromJson(body)
-        .map((json) => ChatMessage.fromJson(json, conversationId: conversationId))
+        .map((json) =>
+            ChatMessage.fromJson(json, conversationId: conversationId))
         .where((message) => message.body.isNotEmpty)
         .toList();
   }
@@ -516,7 +707,8 @@ class RestApiClient implements AnxinApi {
     );
     return mapsFromJson(body)
         .map(ActionProposal.fromJson)
-        .where((action) => action.id.isNotEmpty && !action.confirmed && !action.dismissed)
+        .where((action) =>
+            action.id.isNotEmpty && !action.confirmed && !action.dismissed)
         .toList();
   }
 

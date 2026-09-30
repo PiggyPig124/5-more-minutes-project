@@ -11,6 +11,7 @@ from .test_integration import _settings, _register, _headers
 
 
 def confirmed_memory(client, headers, content):
+    assert client.put('/memories/consent', headers=headers, json={'enabled': True}).status_code == 200
     created = client.post('/memories', headers=headers, json={'content': content, 'kind': 'experience'})
     assert created.status_code == 201, created.text
     memory_id = created.json()['id']
@@ -30,17 +31,43 @@ def test_temporary_emotion_and_unrelated_chinese_query_are_not_facts(tmp_path):
 
 
 def test_explicit_candidate_and_cross_conversation_recall(tmp_path):
-    with TestClient(create_app(_settings(tmp_path / 'journey.db'))) as client:
+    app = create_app(_settings(tmp_path / 'journey.db'))
+
+    class MockMemoryModel:
+        async def run(self, context, user_message):
+            if user_message == '記住我以前在大澳教書':
+                actions = [{
+                    'action': 'suggest', 'memory_id': None,
+                    'content': '我以前在大澳教書', 'kind': 'experience',
+                    'sensitivity': 'ordinary', 'topic_key': None,
+                    'evidence': '記住我以前在大澳教書',
+                }]
+                text = '我會先整理成記憶建議，等你確認。'
+            else:
+                actions = []
+                text = '我記得你提過在大澳教書。' if context.get('memory_sources') else '我暫時沒有相關記憶。'
+            return AgentReply(text=text, proposed_task=None, mode='openai_compatible', memory_actions=actions)
+
+    app.state.orchestrator = MockMemoryModel()
+    with TestClient(app) as client:
         elder = _register(client, 'memory-owner@example.test')
         headers = _headers(elder)
+        assert client.put('/memories/consent', headers=headers, json={'enabled': True}).status_code == 200
         first = client.post('/conversations', headers=headers, json={}).json()['id']
         saved = client.post(f'/conversations/{first}/messages', headers=headers, json={
             'content': '記住我以前在大澳教書', 'client_message_id': 'remember',
         })
         assert saved.status_code == 200, saved.text
-        candidate = saved.json()['assistant_message']['metadata_json']['candidate_memory_id']
+        suggestion = saved.json()['assistant_message']['metadata_json']['memory_suggestion']
         assert client.post('/memories/search', headers=headers, json={'query': '大澳教書'}).json()['items'] == []
-        client.post(f'/memories/{candidate}/confirm', headers=headers)
+        stored = client.post('/memories/save', headers=headers, json={
+            'content': suggestion['content'],
+            'kind': suggestion['kind'],
+            'source_message_id': suggestion['source_message_id'],
+            'topic_key': suggestion.get('topic_key'),
+        })
+        assert stored.status_code == 201, stored.text
+        candidate = stored.json()['id']
         second = client.post('/conversations', headers=headers, json={}).json()['id']
         recalled = client.post(f'/conversations/{second}/messages', headers=headers, json={'content': '你記得我在大澳教書嗎？'})
         assert recalled.status_code == 200, recalled.text

@@ -62,6 +62,9 @@ class PersonalMemory(Base):
     owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(String(30), nullable=False, default="experience")
+    # A model-authored, generic topic key supports dedupe/tombstones and
+    # contextual Community prompts without parsing the memory's wording.
+    topic_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="candidate")
     suppressed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Keep the user's ISO representation (date or datetime) without
@@ -120,6 +123,35 @@ class MemoryRevision(Base):
     )
     version: Mapped[int] = mapped_column(nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MemoryConsent(Base):
+    """Per-account long-term memory opt-in.
+
+    Rows are created only after an explicit user choice. Missing rows mean
+    consent is disabled, which also makes existing databases safe by default.
+    """
+
+    __tablename__ = "memory_consents"
+
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MemoryPreferenceBlock(Base):
+    """Hashed topics the owner deleted or paused, to prevent silent relearning."""
+
+    __tablename__ = "memory_preference_blocks"
+
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    topic_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(20), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class Story(Base):

@@ -8,12 +8,22 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
+from ..community_search import community_listing_type_from_query, explicit_community_query, topic_from_query
 from ..dependencies import get_current_account, get_owned_conversation
 from ..models import Account, ActionProposal, Conversation, Message
 from ..memory_models import PersonalMemory
-from ..memory_service import retrieve_for_chat, propose_from_message, memory_revision
+from ..memory_consent import memory_consent_enabled
+from ..memory_service import (
+    apply_model_memory_actions,
+    community_memory_prompt,
+    model_memory_context,
+    memory_to_dict,
+    retrieve_for_chat,
+    memory_revision,
+)
 from ..resource_service import search_resources
 from ..schemas import (
     ActionOut,
@@ -111,7 +121,9 @@ def _lock_conversation_for_write(db: Session, conversation_id: str, owner_id: st
     return conversation
 
 
-def _replay_send(db: Session, conversation: Conversation, user_message: Message) -> SendMessageOut:
+def _replay_send(
+    db: Session, conversation: Conversation, user_message: Message, *, memory_enabled: bool = False
+) -> SendMessageOut:
     """Return the durable result for a retried client message."""
 
     assistant_message = db.scalar(
@@ -209,7 +221,8 @@ async def send_message(
     db: Session = Depends(get_db),
 ) -> SendMessageOut:
     owner_id = account.id
-    context_revision = memory_revision(db, owner_id)
+    memory_enabled = account.role == "elder" and memory_consent_enabled(db, owner_id)
+    context_revision = memory_revision(db, owner_id) if memory_enabled else 0
     conversation = get_owned_conversation(db, account, conversation_id)
     if payload.client_message_id:
         existing = db.scalar(
@@ -225,14 +238,21 @@ async def send_message(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="client_message_id is already associated with different content",
                 )
-            return _replay_send(db, conversation, existing)
+            return _replay_send(db, conversation, existing, memory_enabled=memory_enabled)
     context = {
         "rolling_summary": conversation.rolling_summary or "",
         "recent_context": list(conversation.recent_context or []),
     }
-    memory_result = await retrieve_for_chat(db, owner_id, payload.content)
+    memory_result = (
+        await retrieve_for_chat(db, owner_id, payload.content)
+        if memory_enabled
+        else {"items": [], "retrieval_mode": "disabled"}
+    )
     context["memory_sources"] = jsonable_encoder(memory_result["items"])
     context["memory_retrieval_mode"] = memory_result["retrieval_mode"]
+    memory_management = model_memory_context(db, owner_id) if memory_enabled else []
+    if memory_enabled:
+        context["memory_management"] = {"active_memories": memory_management}
     resource_query = bool(re.search(
         r"福利|津貼|津贴|補助|补助|資助|资助|醫療費|医疗费|覆診費|覆诊费|"
         r"照顧者支援|照顾者支援|社區照顧|社区照顾|長者中心|长者中心|"
@@ -245,6 +265,21 @@ async def send_message(
         resource_result = await search_resources(db, payload.content[:500])
     context["resource_sources"] = resource_result["items"]
     context["resource_conflicts"] = resource_result["conflicts"]
+    community_result = None
+    if explicit_community_query(payload.content):
+        # Search fixed public provider pages and filter locally with a closed
+        # generic topic label. User text, identity and memories are not fetched.
+        community_result = await run_in_threadpool(
+            request.app.state.community_search.search,
+            listing_type=community_listing_type_from_query(payload.content), topic=topic_from_query(payload.content)
+        )
+        context["community_search"] = jsonable_encoder({
+            "search_state": community_result["search_state"],
+            "message": community_result["message"],
+            "checked_at": community_result["checked_at"],
+            "sources": community_result["sources"],
+            "items": community_result["items"][:8],
+        })
     # Release the read transaction while a remote model provider is running.
     # Authorization and ownership were checked above; the write transaction
     # starts only after the provider returns.
@@ -259,12 +294,24 @@ async def send_message(
             detail={"message": reply.text, "mode": "error"},
         )
 
+    # This local policy creates a user-visible follow-up only. It is not added
+    # to model context and never starts a provider search. A model memory
+    # decision takes precedence on the same turn.
+    memory_actions = getattr(reply, "memory_actions", [])
+    community_prompt = (
+        community_memory_prompt(db, owner_id, payload.content)
+        if memory_enabled and not memory_actions
+        else None
+    )
+
     # The model call runs outside a database transaction. Reopen a serialized
     # write section now, rechecking the client key in case another request
     # completed the same message while the provider was running.
     db.rollback()
     conversation = _lock_conversation_for_write(db, conversation_id, owner_id)
-    if memory_revision(db, owner_id) != context_revision:
+    if memory_enabled and not memory_consent_enabled(db, owner_id):
+        raise HTTPException(409, "記憶授權已關閉，請重試。")
+    if memory_enabled and memory_revision(db, owner_id) != context_revision:
         raise HTTPException(409, "記憶資料已更新，請重試以使用最新內容。")
     # A memory may have been withdrawn while a remote model was answering.
     # Reject that stale answer instead of resurrecting its text in history.
@@ -288,12 +335,26 @@ async def send_message(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="client_message_id is already associated with different content",
                 )
-            return _replay_send(db, conversation, existing)
+            return _replay_send(db, conversation, existing, memory_enabled=memory_enabled)
 
     max_ordinal = db.scalar(select(func.max(Message.ordinal)).where(Message.conversation_id == conversation.id))
     next_ordinal = int(max_ordinal or 0) + 1
     user_metadata = {"client_message_id": payload.client_message_id} if payload.client_message_id else {}
-    user_metadata["source_memory_ids"] = [source["id"] for source in context["memory_sources"]]
+    action_memory_ids = {
+        str(item.get("memory_id"))
+        for item in memory_actions if isinstance(item, dict)
+        and item.get("action") in {"correct_preference", "forget"}
+        and item.get("memory_id")
+        and str(item.get("memory_id")) in {str(row["id"]) for row in memory_management}
+    } if isinstance(memory_actions, list) else set()
+    forget_memory_ids = {
+        str(item.get("memory_id")) for item in memory_actions if isinstance(item, dict)
+        and item.get("action") == "forget" and item.get("memory_id")
+        and str(item.get("memory_id")) in {str(row["id"]) for row in memory_management}
+    } if isinstance(memory_actions, list) else set()
+    user_metadata["source_memory_ids"] = sorted({
+        str(source["id"]) for source in context["memory_sources"]
+    } | forget_memory_ids)
     user_message = Message(
         conversation_id=conversation.id,
         sender_id=account.id,
@@ -308,28 +369,29 @@ async def send_message(
         sender_id=None,
         role="assistant",
         content=reply.text,
-        metadata_json={
+        metadata_json=jsonable_encoder({
             "mode": reply.mode, "demo_label": reply.mode == "deterministic_demo",
             "memory_sources": context["memory_sources"],
             "memory_retrieval_mode": memory_result["retrieval_mode"],
             "resource_sources": resource_result["items"],
             "resource_retrieval_mode": resource_result["retrieval_mode"],
             "resource_conflicts": resource_result["conflicts"],
-        },
+            "source_memory_ids": sorted({
+                str(source["id"]) for source in context["memory_sources"]
+            } | action_memory_ids),
+            **({
+                "community_sources": jsonable_encoder(community_result["sources"]),
+                "community_search_state": community_result["search_state"],
+                "community_results": jsonable_encoder(community_result["items"][:8]),
+                "community_search_checked_at": jsonable_encoder(community_result["checked_at"]),
+            } if community_result is not None else {}),
+        }),
         ordinal=next_ordinal + 1,
     )
     action = None
     try:
         db.add_all([user_message, assistant_message])
         db.flush()
-        if account.role == "elder":
-            candidate = propose_from_message(db, owner_id, user_message)
-            if candidate is not None:
-                assistant_message.metadata_json = {
-                    **assistant_message.metadata_json,
-                    "candidate_memory_id": candidate.id,
-                }
-                assistant_message.content += "\n已整理成待確認記憶；請到「記憶」核對，確認前不會用作長期回憶。"
         if reply.proposed_task is not None:
             action = ActionProposal(
                 conversation_id=conversation.id,
@@ -343,6 +405,36 @@ async def send_message(
             assistant_message.metadata_json = {
                 **dict(assistant_message.metadata_json or {}),
                 "action_id": action.id,
+            }
+        memory_result = (
+            apply_model_memory_actions(
+                db,
+                owner_id,
+                user_message,
+                memory_actions if reply.mode == "openai_compatible" and memory_enabled and account.role == "elder" else [],
+                memory_management,
+                [payload.content],
+            )
+            if memory_enabled and account.role == "elder"
+            else {"saved": [], "suggestion": None, "forgotten_ids": []}
+        )
+        saved_memories = memory_result["saved"]
+        if saved_memories:
+            assistant_message.metadata_json = {
+                **dict(assistant_message.metadata_json or {}),
+                "auto_saved_memory": jsonable_encoder(
+                    memory_to_dict(saved_memories[0], capture_method="agent_auto")
+                ),
+            }
+        if memory_result.get("suggestion") is not None:
+            assistant_message.metadata_json = {
+                **dict(assistant_message.metadata_json or {}),
+                "memory_suggestion": jsonable_encoder(memory_result["suggestion"]),
+            }
+        if community_prompt is not None:
+            assistant_message.metadata_json = {
+                **dict(assistant_message.metadata_json or {}),
+                "community_memory_prompt": community_prompt,
             }
         _refresh_context(db, conversation)
         db.commit()
@@ -362,7 +454,7 @@ async def send_message(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="client_message_id is already associated with different content",
                     )
-                return _replay_send(db, conversation, existing)
+                return _replay_send(db, conversation, existing, memory_enabled=memory_enabled)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Message could not be persisted")
     return SendMessageOut(
         conversation=_conversation_out(conversation),

@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.llm import AgentReply, OpenAICompatibleAdapter
+from app.llm import AgentReply, OpenAICompatibleAdapter, _validate_memory_actions
 from app.main import create_app
 
 
@@ -344,7 +344,15 @@ def test_openai_compatible_adapter_receives_persisted_context(monkeypatch: pytes
                 return None
 
             def json(self) -> dict:
-                return {"choices": [{"message": {"content": json.dumps({"text": "收到", "proposed_task": None})}}]}
+                action = {
+                    "action": "save_preference", "memory_id": None,
+                    "content": "I enjoy Cantonese opera.", "kind": "preference",
+                    "sensitivity": "ordinary", "topic_key": "cantonese_opera",
+                    "evidence": "The opera is what I look forward to every week.",
+                }
+                return {"choices": [{"message": {"content": json.dumps({
+                    "text": "收到", "proposed_task": None, "memory_actions": [action],
+                })}}]}
 
         class FakeClient:
             def __init__(self, **kwargs):
@@ -367,6 +375,7 @@ def test_openai_compatible_adapter_receives_persisted_context(monkeypatch: pytes
             {
                 "rolling_summary": "user: an older persisted detail",
                 "recent_context": [{"role": "user", "content": "a recent persisted detail"}],
+                "memory_management": {"active_memories": [{"id": "memory-1", "content": "I enjoy opera."}]},
             },
             "What did I say earlier?",
         )
@@ -376,5 +385,24 @@ def test_openai_compatible_adapter_receives_persisted_context(monkeypatch: pytes
         assert "older persisted detail" in serialized
         assert "recent persisted detail" in serialized
         assert "untrusted context" in serialized
+        assert "I enjoy opera" in serialized
+        assert captured["body"]["response_format"]["type"] == "json_schema"
+        assert "memory_actions" in captured["body"]["response_format"]["json_schema"]["schema"]["required"]
+        assert result.memory_actions[0]["content"] == "I enjoy Cantonese opera."
 
     asyncio.run(exercise())
+
+
+def test_memory_action_schema_fails_closed_on_partial_or_sensitive_auto_save() -> None:
+    valid_except_extra = {
+        "action": "save_preference", "memory_id": None,
+        "content": "I enjoy opera.", "kind": "preference",
+        "sensitivity": "ordinary", "topic_key": "opera", "evidence": "I enjoy opera.",
+        "untrusted": "ignored only if parser is unsafe",
+    }
+    assert _validate_memory_actions([valid_except_extra]) == []
+    invalid_sensitivity = {
+        **{key: value for key, value in valid_except_extra.items() if key != "untrusted"},
+        "sensitivity": "sensitive",
+    }
+    assert _validate_memory_actions([invalid_sensitivity]) == []

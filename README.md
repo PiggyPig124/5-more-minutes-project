@@ -1,6 +1,11 @@
 # 安心伴 / Anxin Companion
 
-Interim implementation of the [implementation plan](IMPLEMENTATION_PLAN_EN.md): a Flutter app with older-adult and caregiver experiences, backed by a Python API. It covers accounts, family authorization, text conversations, short-term context, confirmed personal memories, official resource retrieval, private stories, and consented family messages.
+Flutter app with older-adult and caregiver experiences, backed by a Python API. The current delivery work follows the updated Echo SRS; see the [current tasks and GPT-6-luna assignments](docs/CURRENT_TASKS_ZH.md). It builds on accounts, family authorization, text conversations, short-term context, confirmed personal memories, official resource retrieval, private stories, and consented family messages.
+
+The new first phase adds guest conversation and public guidance without an account, explicit Memory opt-in (off by default, including existing accounts), and a Community skill confirmation flow. Guest transcripts stay in process memory, expire after 30 minutes of inactivity, and are removed on explicit session end; a cleanup sweep runs once per minute. Community source adapters and cache/outage handling exist, but automatic fetching is disabled by default pending source-rights review. Skill suggestions still use a limited phrase map rather than model-based skill extraction.
+
+For a Chinese overview of the updated requirements, completed work, verification evidence, and remaining scope, see [Echo requirements and progress](docs/ECHO_REQUIREMENTS_AND_PROGRESS_ZH.md).
+The [feasibility review](docs/ECHO_DEFERRED_FEATURES_FEASIBILITY_ZH.md) identifies a source-terms issue in the volunteer-page adapter. It remains disabled in the default application; technical retrieval is not permission to reuse provider content.
 
 Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo.
 
@@ -55,10 +60,18 @@ The key stays on the server. Configure a model that supports the backend's docum
 
 ### Personal memory and public retrieval
 
-Save a memory as a candidate, review it, then confirm it. Only confirmed,
-unsuppressed facts, experiences, and preferences can be recalled across
-conversations. Emotion entries are excluded from factual recall. Corrections
-create a new candidate for review. Suppression, correction, and deletion withdraw
+Enable Memory explicitly in Settings. With a configured model, the model may
+propose a structured action to save an ordinary preference, correct a preference
+it previously saved, or forget a memory after a clear request. The server checks
+the quoted user evidence, owner, current memory version and sensitive-content
+boundaries before applying an action. Other chat suggestions are transient and
+create no Memory Library row until the owner selects Save. Demo mode does not
+auto-save memories or generate phrase-rule memory suggestions. Turning Memory
+off preserves saved records for review and deletion but stops collection,
+recall and skill discovery. The legacy candidate APIs remain available for
+compatibility. Only confirmed, unsuppressed facts, experiences, and preferences
+can be recalled across conversations. Emotion entries are excluded from factual
+recall. Suppression, correction, and deletion withdraw
 related story cards and sanitize their tracked chat references and shared copies.
 Deletion also removes vectors and correction-chain content from application
 storage. This does not erase screenshots, exports, or recipients' external copies.
