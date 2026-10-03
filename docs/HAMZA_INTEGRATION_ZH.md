@@ -51,10 +51,37 @@
 - 后端和 Flutter 的启动方法沿用 README。演示活动目录需要设置 `DEMO_MODE=true`。
 - 本机系统通知目前仅支持 Android；网页版提供语音草稿与应用内云端收件匣，不提供后台系统通知。
 - 云端提醒只写入应用内消息/收件匣，不是推送。后端运行时才执行排程，设置按香港时间解释。本次内置排程采用单进程锁，部署请使用一个 API worker；多 worker 需要单独的调度工作进程及跨进程协调。
-- 语音按钮使用装置或浏览器服务，实际广东话识别、麦克风权限和真实设备通知送达仍需在目标手机验证。构建和模拟测试不能证明这些真实设备行为。
+- 语音按钮使用装置或浏览器服务。MuMu Android 15 的原生通知及语音不可用提示已验证（见下文）；实际广东话识别及实体手机上的后台提醒送达仍需在目标手机验证。
 - 可选的 `/speech/transcribe` 是独立的腾讯音频上传接口，当前 Flutter 按钮不调用它。需要安装 `backend/requirements-asr.txt` 并设置 `TENCENT_ASR_SECRET_ID` 和 `TENCENT_ASR_SECRET_KEY`；每次上传须明确授权，缺少配置返回 503，不返回虚构转录。
 - 本次真实 HTTP 测试采用 demo 聊天；外部模型和腾讯服务的生产调用没有用真实凭据验证。
 
 ## Windows 构建环境记录
 
 本机已有 Flutter、Android SDK 和 JDK。Gradle 最初遇到 Java Unix 域套接字回环错误，将 `jdk.net.unixdomain.tmpdir` 指向工作区的短路径后构建成功。该调整通过构建命令的环境变量传入，没有写入应用配置。
+
+## MuMu Android 15 设备验收（2026-10-03）
+
+- 设备：`MuMu安卓设备-1`，Android 15 / API 35，ADB `127.0.0.1:16416`。
+- 后端：独立 SQLite `.runtime/mumu-acceptance.db`，`DEMO_MODE=true`，端口 8027。使用随机生成的测试账号；聊天采用确定性演示回复。
+- 设备测试：`app/integration_test/mumu_acceptance_test.dart`，最终结果 `All tests passed!`。实际连接 HTTP 后端，使用真实 Android 插件，未替换为模拟插件。
+- 通过登录、五区首页、云端收件匣及排程保存、聊天提出任务并确认、危机提示且不自动发送家庭求助、活动目录浏览和兴趣添加/撤回、防骗资源及核实步骤。
+- 修复设备测试发现的导航问题：聊天列表原先直接作为路由呈现而缺少 Scaffold/返回按钮，已补上聊天页 AppBar。新增回归检查从聊天返回首页，再进入社区。
+- 正常 APK 目视检查发现登录标题及说明在浅色背景上显示过浅；文字样式改为继承浅色主题的原有颜色，再调整字号，安装后复查可读性。
+- Android 通知：授予测试应用通知权限后，验证每日问候和未来任务的原生排程；调用通知投递后，通过 Android `getActiveNotifications` 确认系统存在测试通知；关闭两种提醒后排程列表为空，并撤销测试通知。演示聊天任务不包含截止日期，未来任务排程使用已确认任务 ID 的未来日期测试数据。没有等待第二天验证闹钟自然到期投递。
+- 语音：系统查询未发现 `android.speech.RecognitionService`，无法验证广东话转录。授予测试应用麦克风权限后，实测首次说明及“设备不支持”提示，确认之后仍能输入文字并发送。没有语音服务，因此未启动录音；正常 APK 安装后撤销测试所用麦克风授权。
+- 导航及文字样式修复后静态分析无问题，75 项 Flutter 回归通过（包含聊天返回路径）；3 项需要独立 HTTP 环境的测试仍按默认设置跳过，它们在前一阶段已显式启用并通过。
+
+复跑设备测试时，先启动上述测试后端，执行 `adb -s 127.0.0.1:16416 reverse tcp:8027 tcp:8027`，再从 `app` 目录运行：
+
+```powershell
+flutter test integration_test/mumu_acceptance_test.dart -d 127.0.0.1:16416 --dart-define=API_ORIGIN=http://127.0.0.1:8027 --reporter expanded
+```
+
+Flutter 会重新安装测试 APK 并重置权限。出现 `MUMU_PERMISSION_SETUP` 后，测试会等待 30 秒；在另一终端执行以下测试应用权限命令：
+
+```powershell
+adb -s 127.0.0.1:16416 shell pm grant hk.anxin.anxin_companion android.permission.POST_NOTIFICATIONS
+adb -s 127.0.0.1:16416 shell pm grant hk.anxin.anxin_companion android.permission.RECORD_AUDIO
+```
+
+此验收脚本针对没有语音服务的 MuMu 实例。测试日志保存在本机 `.runtime/mumu-test.txt`。正常试用 APK 使用 `flutter build apk --debug --dart-define=API_ORIGIN=http://127.0.0.1:8027` 构建，依赖上述后端和 ADB reverse 保持运行。

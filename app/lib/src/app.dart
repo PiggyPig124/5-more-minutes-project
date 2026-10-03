@@ -93,13 +93,19 @@ ThemeData _buildTheme() {
       style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
     ),
     textTheme: base.textTheme.copyWith(
-      displaySmall: const TextStyle(fontSize: 34, fontWeight: FontWeight.w700),
-      headlineSmall: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
-      titleLarge: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-      titleMedium: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-      bodyLarge: const TextStyle(fontSize: 19, height: 1.45),
-      bodyMedium: const TextStyle(fontSize: 17, height: 1.4),
-      labelLarge: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+      displaySmall: base.textTheme.displaySmall!
+          .copyWith(fontSize: 34, fontWeight: FontWeight.w700),
+      headlineSmall: base.textTheme.headlineSmall!
+          .copyWith(fontSize: 28, fontWeight: FontWeight.w700),
+      titleLarge: base.textTheme.titleLarge!
+          .copyWith(fontSize: 24, fontWeight: FontWeight.w700),
+      titleMedium: base.textTheme.titleMedium!
+          .copyWith(fontSize: 20, fontWeight: FontWeight.w700),
+      bodyLarge: base.textTheme.bodyLarge!.copyWith(fontSize: 19, height: 1.45),
+      bodyMedium:
+          base.textTheme.bodyMedium!.copyWith(fontSize: 17, height: 1.4),
+      labelLarge: base.textTheme.labelLarge!
+          .copyWith(fontSize: 17, fontWeight: FontWeight.w700),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -1556,79 +1562,83 @@ class ElderChatScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-          child: Row(
-            children: [
-              Expanded(
-                  child: Text(tr(context, '我的對話', 'My chats'),
-                      style: Theme.of(context).textTheme.headlineSmall)),
-              if (controller.api is HumanGroupApi) ...[
-                IconButton(
-                  onPressed: () =>
-                      Navigator.of(context).push(MaterialPageRoute<void>(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
-                      body: GroupLobbyScreen(
-                        api: controller.api as HumanGroupApi,
-                        accountId: controller.user!.id,
-                      ),
-                    ),
-                  )),
-                  icon: const Icon(Icons.groups_outlined),
-                  tooltip: tr(context, '人與人群聊', 'Human group chats'),
-                ),
-                const SizedBox(width: 8),
-              ],
-              FilledButton.icon(
-                  onPressed: () => _newConversation(context, ref),
-                  icon: const Icon(Icons.add_comment_rounded),
-                  label: Text(tr(context, '新對話', 'New chat'))),
-            ],
-          ),
-        ),
-        Expanded(
-          child: controller.conversations.isEmpty
-              ? ListView(padding: const EdgeInsets.all(20), children: [
-                  EmptyCard(
-                      icon: Icons.forum_outlined,
-                      message: tr(context, '還未有對話。按「新對話」就可以開始。',
-                          'No conversations yet. Select New chat to begin.'))
-                ])
-              : RefreshIndicator(
-                  onRefresh: () => controller.refreshHome(),
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 30),
-                    itemCount: controller.conversations.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final conversation = controller.conversations[index];
-                      return Card(
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 18, vertical: 8),
-                          leading: const CircleAvatar(
-                              child: Icon(Icons.chat_bubble_outline_rounded)),
-                          title: Text(conversation.title,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w700, fontSize: 18)),
-                          subtitle: Text(conversation.preview ??
-                              tr(context, '按一下繼續這段對話。',
-                                  'Tap to continue this conversation.')),
-                          trailing: const Icon(Icons.chevron_right_rounded),
-                          onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                  builder: (_) => ChatDetailScreen(
-                                      conversation: conversation))),
+    return Scaffold(
+      appBar: AppBar(title: Text(tr(context, '聊天', 'Chat'))),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+            child: Row(
+              children: [
+                Expanded(
+                    child: Text(tr(context, '我的對話', 'My chats'),
+                        style: Theme.of(context).textTheme.headlineSmall)),
+                if (controller.api is HumanGroupApi) ...[
+                  IconButton(
+                    onPressed: () =>
+                        Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => Scaffold(
+                        appBar:
+                            AppBar(title: Text(tr(context, '群聊', 'Groups'))),
+                        body: GroupLobbyScreen(
+                          api: controller.api as HumanGroupApi,
+                          accountId: controller.user!.id,
                         ),
-                      );
-                    },
+                      ),
+                    )),
+                    icon: const Icon(Icons.groups_outlined),
+                    tooltip: tr(context, '人與人群聊', 'Human group chats'),
                   ),
-                ),
-        ),
-      ],
+                  const SizedBox(width: 8),
+                ],
+                FilledButton.icon(
+                    onPressed: () => _newConversation(context, ref),
+                    icon: const Icon(Icons.add_comment_rounded),
+                    label: Text(tr(context, '新對話', 'New chat'))),
+              ],
+            ),
+          ),
+          Expanded(
+            child: controller.conversations.isEmpty
+                ? ListView(padding: const EdgeInsets.all(20), children: [
+                    EmptyCard(
+                        icon: Icons.forum_outlined,
+                        message: tr(context, '還未有對話。按「新對話」就可以開始。',
+                            'No conversations yet. Select New chat to begin.'))
+                  ])
+                : RefreshIndicator(
+                    onRefresh: () => controller.refreshHome(),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 30),
+                      itemCount: controller.conversations.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final conversation = controller.conversations[index];
+                        return Card(
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 8),
+                            leading: const CircleAvatar(
+                                child: Icon(Icons.chat_bubble_outline_rounded)),
+                            title: Text(conversation.title,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700, fontSize: 18)),
+                            subtitle: Text(conversation.preview ??
+                                tr(context, '按一下繼續這段對話。',
+                                    'Tap to continue this conversation.')),
+                            trailing: const Icon(Icons.chevron_right_rounded),
+                            onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                    builder: (_) => ChatDetailScreen(
+                                        conversation: conversation))),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

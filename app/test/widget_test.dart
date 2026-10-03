@@ -39,6 +39,12 @@ void main() {
     await tester.tap(find.text('開始聊天'));
     await tester.pumpAndSettle();
     expect(find.text('我的對話'), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('開始聊天'), findsOneWidget);
+    await tester.tap(find.text('社區'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CommunityScreen), findsOneWidget);
   });
 
   testWidgets('caregiver shell has shared tasks and no private chat tab',
