@@ -25,6 +25,8 @@ from ..memory_service import (
     memory_revision,
 )
 from ..resource_service import search_resources
+from ..safety_models import SafetyEvent
+from ..llm import detect_urgent_risk
 from ..schemas import (
     ActionOut,
     ConversationCreate,
@@ -139,7 +141,7 @@ def _replay_send(
     action_id = metadata.get("action_id")
     action = db.get(ActionProposal, action_id) if action_id else None
     mode = metadata.get("mode")
-    if mode not in {"deterministic_demo", "openai_compatible", "error"}:
+    if mode not in {"deterministic_demo", "openai_compatible", "error", "safety_intervention"}:
         mode = "error"
     return SendMessageOut(
         conversation=_conversation_out(conversation),
@@ -221,7 +223,8 @@ async def send_message(
     db: Session = Depends(get_db),
 ) -> SendMessageOut:
     owner_id = account.id
-    memory_enabled = account.role == "elder" and memory_consent_enabled(db, owner_id)
+    urgent_risk = detect_urgent_risk(payload.content)
+    memory_enabled = account.role == "elder" and not urgent_risk and memory_consent_enabled(db, owner_id)
     context_revision = memory_revision(db, owner_id) if memory_enabled else 0
     conversation = get_owned_conversation(db, account, conversation_id)
     if payload.client_message_id:
@@ -261,12 +264,12 @@ async def send_message(
     ))
     context["resource_query"] = resource_query
     resource_result = {"items": [], "retrieval_mode": "not_requested", "conflicts": []}
-    if resource_query:
+    if resource_query and not urgent_risk:
         resource_result = await search_resources(db, payload.content[:500])
     context["resource_sources"] = resource_result["items"]
     context["resource_conflicts"] = resource_result["conflicts"]
     community_result = None
-    if explicit_community_query(payload.content):
+    if not urgent_risk and explicit_community_query(payload.content):
         # Search fixed public provider pages and filter locally with a closed
         # generic topic label. User text, identity and memories are not fetched.
         community_result = await run_in_threadpool(
@@ -389,9 +392,27 @@ async def send_message(
         ordinal=next_ordinal + 1,
     )
     action = None
+    safety_event = None
     try:
         db.add_all([user_message, assistant_message])
         db.flush()
+        # When the safety node intercepted the conversation, persist a
+        # SafetyEvent so the elder can review when interventions occurred.
+        # The event is private: caregivers never see safety events.
+        if reply.mode == "safety_intervention" and account.role == "elder":
+            safety_event = SafetyEvent(
+                elder_id=owner_id,
+                conversation_id=conversation.id,
+                trigger_message_id=user_message.id,
+                intervention_mode="safety_intervention",
+                support_request_sent=False,
+            )
+            db.add(safety_event)
+            db.flush()
+            assistant_message.metadata_json = {
+                **dict(assistant_message.metadata_json or {}),
+                "safety_event_id": safety_event.id,
+            }
         if reply.proposed_task is not None:
             action = ActionProposal(
                 conversation_id=conversation.id,

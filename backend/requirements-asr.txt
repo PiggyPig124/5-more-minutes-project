@@ -1,0 +1,3 @@
+# Optional backend audio-upload transcription. Device speech needs no Tencent SDK.
+-r requirements.txt
+tencentcloud-sdk-python>=3.0,<4.0

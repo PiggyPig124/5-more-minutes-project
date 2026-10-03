@@ -5,6 +5,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'api_client.dart';
 import 'app_controller.dart';
 import 'models.dart';
+import 'care_controls_screen.dart';
+import 'reminders.dart';
+import 'reminder_settings_screen.dart';
+import 'safety.dart';
+import 'speech_input.dart';
 import 'storage.dart';
 import 'localization.dart';
 import 'settings_screen.dart';
@@ -19,7 +24,12 @@ final appControllerProvider = ChangeNotifierProvider<AppController>(
   (ref) => AppController(
     api: ref.watch(apiProvider),
     sessionStore: ref.watch(sessionStoreProvider),
+    reminderScheduler: ref.watch(reminderSchedulerProvider),
   ),
+);
+
+final voiceInputProvider = ChangeNotifierProvider<VoiceInputController>(
+  (ref) => VoiceInputController(),
 );
 
 class AnxinApp extends ConsumerWidget {
@@ -654,6 +664,13 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
         child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
             children: [
+              OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                          builder: (_) => const ActivityCatalogScreen())),
+                  icon: const Icon(Icons.event_available),
+                  label: Text(tr(context, '活動目錄及感興趣清單',
+                      'Activity catalog and interests'))),
               Text(tr(context, '社區', 'Community'),
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 6),
@@ -991,6 +1008,12 @@ class _HelpScreenState extends ConsumerState<HelpScreen> {
     return ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
         children: [
+          OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const ScamSafetyScreen())),
+              icon: const Icon(Icons.shield_outlined),
+              label: Text(tr(context, '防騙指引', 'Scam safety'))),
           Text(tr(context, '幫助', 'Help'),
               style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 8),
@@ -1166,6 +1189,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                 padding: EdgeInsets.only(right: 8),
                 child: DemoModeLabel(compact: true)),
           IconButton(
+            tooltip: tr(context, '收件匣及關懷設定', 'Inbox and care settings'),
+            icon: const Icon(Icons.inbox_outlined),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => CareControlsScreen(controller: controller))),
+          ),
+          IconButton(
             tooltip: tr(context, '帳戶設定及登出', 'Account and settings'),
             icon: const Icon(Icons.account_circle_outlined),
             onPressed: () => showModalBottomSheet<void>(
@@ -1215,6 +1244,23 @@ class AccountSheet extends ConsumerWidget {
                   'Demo replies are enabled; no AI model is connected. You can still try memories, resources and family features.')),
             ],
             const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => CareControlsScreen(
+                          controller: ref.read(appControllerProvider)))),
+              icon: const Icon(Icons.health_and_safety_outlined),
+              label: Text(tr(context, '關懷及安全', 'Care and safety')),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => ReminderSettingsScreen(
+                          controller: ref.read(appControllerProvider),
+                          scheduler: ref.read(reminderSchedulerProvider)))),
+              icon: const Icon(Icons.notifications_active_outlined),
+              label: Text(tr(context, '本機提醒', 'Device reminders')),
+            ),
             OutlinedButton.icon(
                 onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -1516,10 +1562,13 @@ class ElderChatScreen extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
           child: Row(
             children: [
-              Expanded(child: Text(tr(context, '我的對話', 'My chats'), style: Theme.of(context).textTheme.headlineSmall)),
+              Expanded(
+                  child: Text(tr(context, '我的對話', 'My chats'),
+                      style: Theme.of(context).textTheme.headlineSmall)),
               if (controller.api is HumanGroupApi) ...[
                 IconButton(
-                  onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  onPressed: () =>
+                      Navigator.of(context).push(MaterialPageRoute<void>(
                     builder: (_) => Scaffold(
                       appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
                       body: GroupLobbyScreen(
@@ -1533,7 +1582,10 @@ class ElderChatScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 8),
               ],
-              FilledButton.icon(onPressed: () => _newConversation(context, ref), icon: const Icon(Icons.add_comment_rounded), label: Text(tr(context, '新對話', 'New chat'))),
+              FilledButton.icon(
+                  onPressed: () => _newConversation(context, ref),
+                  icon: const Icon(Icons.add_comment_rounded),
+                  label: Text(tr(context, '新對話', 'New chat'))),
             ],
           ),
         ),
@@ -1594,12 +1646,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   final _draftController = TextEditingController();
   final _scrollController = ScrollController();
   bool _loadedDraft = false;
+  late final VoiceInputController _voiceInput;
+  bool _voiceDisclosureAccepted = false;
+  bool _showSafetySupport = false;
   final Set<String> _dismissedMemorySuggestions = <String>{};
   final Map<String, bool> _communityPromptAnswers = <String, bool>{};
 
   @override
   void initState() {
     super.initState();
+    _voiceInput = ref.read(voiceInputProvider);
     final controller = ref.read(appControllerProvider);
     Future<void>(() async {
       await controller.loadMessages(widget.conversation.id);
@@ -1613,6 +1669,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
 
   @override
   void dispose() {
+    _voiceInput.detach();
     _draftController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -1621,6 +1678,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   Future<void> _send() async {
     final text = _draftController.text;
     if (text.trim().isEmpty) return;
+    if (detectsUrgentRisk(text)) setState(() => _showSafetySupport = true);
     final sent = await ref
         .read(appControllerProvider)
         .sendMessage(conversationId: widget.conversation.id, content: text);
@@ -1634,9 +1692,52 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     }
   }
 
+  Future<void> _toggleVoiceInput() async {
+    if (!_voiceDisclosureAccepted) {
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(tr(context, '廣東話語音輸入', 'Cantonese voice input')),
+          content: Text(tr(
+            context,
+            '語音辨識由你的裝置或瀏覽器提供。咪高峰音訊會交由該語音服務處理，其資料政策由服務供應者決定；安心伴只會收到辨識文字。傳送前你可以檢查和修改文字。',
+            "Speech recognition is provided by your device or browser. Microphone audio is processed by that speech service under its provider's data policy; Anxin receives only the recognized text. Review and edit the transcript before sending.",
+          )),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(tr(context, '取消', 'Cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(tr(context, '繼續', 'Continue')),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true || !mounted) return;
+      _voiceDisclosureAccepted = true;
+    }
+    final initialDraft = _draftController.text.trim();
+    await _voiceInput.toggle(
+      onTranscript: (transcript) {
+        final updated =
+            initialDraft.isEmpty ? transcript : '$initialDraft $transcript';
+        _draftController.value = TextEditingValue(
+          text: updated,
+          selection: TextSelection.collapsed(offset: updated.length),
+        );
+        ref
+            .read(appControllerProvider)
+            .saveDraft(widget.conversation.id, updated);
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
+    final voice = ref.watch(voiceInputProvider);
     final messages = controller.messagesFor(widget.conversation.id);
     final actions = controller.pendingActions
         .where((action) =>
@@ -1658,8 +1759,12 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
               Padding(
                   padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
                   child: ErrorBanner(message: controller.errorMessage!)),
+            if (voice.notice != null)
+              Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Text(voice.notice!, key: const Key('voice-notice'))),
             Expanded(
-              child: messages.isEmpty && actions.isEmpty
+              child: messages.isEmpty && actions.isEmpty && !_showSafetySupport
                   ? ListView(padding: const EdgeInsets.all(24), children: [
                       EmptyCard(
                           icon: Icons.chat_rounded,
@@ -1684,6 +1789,9 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                                           interested),
                             )),
                         ...actions.map((action) => ActionCard(action: action)),
+                        if (_showSafetySupport)
+                          SafetySupportCard(
+                              links: controller.familyMessageLinks),
                       ],
                     ),
             ),
@@ -1708,6 +1816,23 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                             hintText: tr(context, '寫下你想分享的事…',
                                 'What would you like to share?'),
                             prefixIcon: Icon(Icons.edit_note_rounded)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    IconButton.filledTonal(
+                      key: const Key('cantonese-voice-input'),
+                      tooltip: voice.isListening
+                          ? tr(context, '停止廣東話語音輸入',
+                              'Stop Cantonese voice input')
+                          : tr(context, '廣東話語音輸入', 'Cantonese voice input'),
+                      onPressed: busy ? null : _toggleVoiceInput,
+                      icon: Icon(voice.isListening
+                          ? Icons.stop_circle_rounded
+                          : Icons.mic_none_rounded),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(54, 54),
+                        backgroundColor:
+                            voice.isListening ? const Color(0xFFF4D8D5) : null,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -2016,8 +2141,10 @@ class MessageBubble extends ConsumerWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700)),
                       const SizedBox(height: 5),
                       Text(message.memorySuggestion!.content),
-                      if (message.memorySuggestion!.sensitivity == 'sensitive' ||
-                          message.memorySuggestion!.sensitivity == 'uncertain') ...[
+                      if (message.memorySuggestion!.sensitivity ==
+                              'sensitive' ||
+                          message.memorySuggestion!.sensitivity ==
+                              'uncertain') ...[
                         const SizedBox(height: 6),
                         Text(tr(
                           context,
@@ -3668,3 +3795,922 @@ String _errorLabel(BuildContext context, String message) {
   }
   return message;
 }
+
+class SafetySupportCard extends ConsumerWidget {
+  const SafetySupportCard({required this.links, super.key});
+
+  final List<FamilyInvitation> links;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Card(
+      color: const Color(0xFFFFF0E8),
+      margin: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.support_rounded,
+                    color: Theme.of(context).colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    tr(context, '你不必獨自面對',
+                        'You do not have to face this alone'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(tr(
+              context,
+              '我很高興你告訴我。若你或他人正處於即時危險，請致電999或前往最近的急症室。安心伴不能提供緊急救援，也不會自動聯絡任何人。',
+              'I am glad you told me. If you or someone else is in immediate danger, call 999 or go to the nearest emergency department. Anxin cannot provide emergency rescue and will not contact anyone automatically.',
+            )),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: () async {
+                    final launched =
+                        await launchUrl(Uri(scheme: 'tel', path: '999'));
+                    if (!launched && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(tr(
+                            context,
+                            '無法開啟電話。請使用電話撥打999。',
+                            'Could not open the phone app. Please dial 999 directly.',
+                          )),
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.call_rounded),
+                  label: Text(tr(context, '致電999', 'Call 999')),
+                ),
+                OutlinedButton.icon(
+                  onPressed: links.isEmpty
+                      ? null
+                      : () => _sendFamilySupportRequest(context, ref),
+                  icon: const Icon(Icons.message_outlined),
+                  label: Text(tr(
+                    context,
+                    '向一位家人求助',
+                    'Ask one family member for support',
+                  )),
+                ),
+                OutlinedButton.icon(
+                  key: const Key('open-designated-support'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => CareControlsScreen(
+                        controller: ref.read(appControllerProvider),
+                        initialTab: 2,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.contact_emergency_outlined),
+                  label: Text(
+                      tr(context, '指定聯絡人支援', 'Designated contact support')),
+                ),
+              ],
+            ),
+            if (links.isEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                tr(
+                  context,
+                  '目前沒有已授權家庭訊息的聯絡人。你可使用家庭頁面設定授權；不會向其他人發送訊息。',
+                  'No family-message recipient is currently authorized. You can set up permission in Family; nobody else will be contacted.',
+                ),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sendFamilySupportRequest(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final controller = ref.read(appControllerProvider);
+    var selectedId = links.first.id;
+    final selected = await showDialog<FamilyInvitation>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(tr(
+            context,
+            '選擇一位已授權家人',
+            'Choose one authorized family member',
+          )),
+          content: DropdownButtonFormField<String>(
+            initialValue: selectedId,
+            items: links
+                .map(
+                  (link) => DropdownMenuItem(
+                    value: link.id,
+                    child: Text(controller.familyCounterpartLabel(link)),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setDialogState(() => selectedId = value);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(tr(context, '取消', 'Cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                links.firstWhere((link) => link.id == selectedId),
+              ),
+              child: Text(tr(context, '下一步', 'Continue')),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !context.mounted) return;
+
+    const messageEnglish =
+        'I may need some support. Please contact me when you can.';
+    const messageChinese = '我現在可能需要一些支援。方便時請聯絡我。';
+    final message = Localizations.localeOf(context).languageCode == 'en'
+        ? messageEnglish
+        : messageChinese;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr(context, '請確認求助訊息', 'Review support request')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${tr(context, '收件人：', 'Recipient: ')}${controller.familyCounterpartLabel(selected)}',
+            ),
+            const SizedBox(height: 12),
+            Text(message),
+            const SizedBox(height: 12),
+            Text(tr(
+              context,
+              '只有在你確認後，訊息才會傳送。若有即時危險，請致電999。',
+              'The message is sent only after you confirm. For immediate danger, call 999.',
+            )),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(context, '返回', 'Back')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(context, '確認並傳送', 'Confirm and send')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    final sent = await controller.sendFamilyMessage(
+      link: selected,
+      content: message,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          sent
+              ? tr(context, '求助訊息已傳送。', 'Support request sent.')
+              : controller.errorMessage ??
+                  tr(
+                    context,
+                    '未能傳送求助訊息；如有即時危險，請致電999。',
+                    'The support request could not be sent. Call 999 if there is immediate danger.',
+                  ),
+        ),
+      ),
+    );
+  }
+}
+
+class ActivityCatalogScreen extends ConsumerStatefulWidget {
+  const ActivityCatalogScreen({super.key});
+
+  @override
+  ConsumerState<ActivityCatalogScreen> createState() =>
+      _ActivityCatalogScreenState();
+}
+
+class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
+  String? _selectedDistrict;
+  String? _selectedInterest;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.microtask(() {
+      final controller = ref.read(appControllerProvider);
+      controller.refreshCatalogActivities(silent: true);
+      controller.refreshCatalogInterests(silent: true);
+      if (controller.isElder) {
+        controller.refreshCatalogRecommendations(silent: true);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = ref.watch(appControllerProvider);
+    final activities = controller.catalogActivities;
+    final filtered = activities.where((a) {
+      if (_selectedDistrict != null &&
+          (a.district ?? '').replaceAll('區', '') !=
+              _selectedDistrict!.replaceAll('區', '')) {
+        return false;
+      }
+      if (_selectedInterest != null &&
+          !a.interestTags.any((t) =>
+              t.toLowerCase().contains(_selectedInterest!.toLowerCase()))) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    return Scaffold(
+      appBar: AppBar(title: Text(tr(context, '社區參與', 'Community'))),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await controller.refreshCatalogActivities();
+          await controller.refreshCatalogInterests(silent: true);
+        },
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+          children: [
+            Text(tr(context, '參與社區活動', 'Join community activities'),
+                style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 7),
+            Text(tr(context, '按地區或興趣篩選活動目錄。示例活動只供試用，時間、費用及地點須向機構確認。表達興趣不代表已報名。',
+                'Filter the activity directory by district or interest. Example activities are for trying the app; confirm times, fees and venues with the organizer. Expressing interest is not registration.')),
+            const SizedBox(height: 18),
+
+            // District filter
+            DropdownButtonFormField<String>(
+              initialValue: _selectedDistrict,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: tr(context, '按地區', 'By district'),
+                prefixIcon: const Icon(Icons.place_outlined),
+              ),
+              items: [
+                DropdownMenuItem(
+                  value: null,
+                  child: Text(tr(context, '全部地區', 'All districts')),
+                ),
+                ..._hongKongDistricts.map((d) => DropdownMenuItem(
+                      value: d.$2,
+                      child: Text(
+                          Localizations.localeOf(context).languageCode == 'en'
+                              ? d.$1
+                              : d.$2),
+                    )),
+              ],
+              onChanged: (value) => setState(() => _selectedDistrict = value),
+            ),
+            const SizedBox(height: 12),
+
+            // Interest filter
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ('太極', 'Tai Chi'),
+                ('書法', 'Calligraphy'),
+                ('煮食', 'Cooking'),
+                ('義工', 'Volunteering'),
+                ('合唱', 'Choir'),
+                ('園藝', 'Gardening'),
+                ('數碼', 'Digital'),
+              ].map((tag) {
+                final selected = _selectedInterest == tag.$1;
+                return FilterChip(
+                  label: Text(tr(context, tag.$1, tag.$2)),
+                  selected: selected,
+                  onSelected: (value) =>
+                      setState(() => _selectedInterest = value ? tag.$1 : null),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 18),
+
+            // Recommendations section (elder only)
+            if (controller.isElder &&
+                controller.catalogRecommendations.isNotEmpty) ...[
+              SectionTitle(title: tr(context, '為你推薦', 'For you')),
+              const SizedBox(height: 9),
+              ...controller.catalogRecommendations
+                  .take(3)
+                  .map((activity) => CatalogActivityCard(
+                        activity: activity,
+                        isInterested: controller.catalogInterests
+                            .any((i) => i.id == activity.id),
+                        onInterest: controller.isElder
+                            ? () => (controller.catalogInterests
+                                    .any((i) => i.id == activity.id)
+                                ? controller.withdrawInterest(activity)
+                                : controller.expressInterest(activity))
+                            : null,
+                      )),
+              const SizedBox(height: 18),
+            ],
+
+            // My interests section
+            if (controller.isElder &&
+                controller.catalogInterests.isNotEmpty) ...[
+              SectionTitle(
+                  title: tr(context, '我感興趣的', 'My interests'),
+                  action: '${controller.catalogInterests.length}'),
+              const SizedBox(height: 9),
+              ...controller.catalogInterests
+                  .map((activity) => CatalogActivityCard(
+                        activity: activity,
+                        isInterested: true,
+                        onInterest: () => controller.withdrawInterest(activity),
+                      )),
+              const SizedBox(height: 18),
+            ],
+
+            // All activities
+            SectionTitle(
+                title: tr(context, '全部活動', 'All activities'),
+                action: filtered.isEmpty ? null : '${filtered.length}'),
+            const SizedBox(height: 9),
+            if (filtered.isEmpty)
+              EmptyCard(
+                  icon: Icons.groups_outlined,
+                  message: tr(context, '暫時沒有符合篩選條件的活動。試試其他地區或興趣。',
+                      'No activities match your filters. Try a different district or interest.'))
+            else
+              ...filtered.map((activity) => CatalogActivityCard(
+                    activity: activity,
+                    isInterested: controller.catalogInterests
+                        .any((i) => i.id == activity.id),
+                    onInterest: controller.isElder
+                        ? () => (controller.catalogInterests
+                                .any((i) => i.id == activity.id)
+                            ? controller.withdrawInterest(activity)
+                            : controller.expressInterest(activity))
+                        : null,
+                  )),
+
+            if (controller.errorMessage != null) ...[
+              const SizedBox(height: 14),
+              ErrorBanner(message: controller.errorMessage!),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CatalogActivityCard extends StatelessWidget {
+  const CatalogActivityCard({
+    required this.activity,
+    required this.isInterested,
+    this.onInterest,
+    super.key,
+  });
+
+  final CatalogActivity activity;
+  final bool isInterested;
+  final Future<bool> Function()? onInterest;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(17, 16, 17, 15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!activity.verified)
+              Text(tr(context, '示例活動 · 詳情未核實',
+                  'Example activity · details unverified')),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(activity.title,
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                if (activity.contributionType != null)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDDEDEA),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      activity.contributionType == 'contribute'
+                          ? tr(context, '貢獻', 'Contribute')
+                          : tr(context, '參與', 'Participate'),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF116466),
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ),
+              ],
+            ),
+            if (activity.organizer != null &&
+                activity.organizer!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(activity.organizer!,
+                  style: Theme.of(context).textTheme.bodyMedium),
+            ],
+            const SizedBox(height: 8),
+            Text(activity.description),
+            if (activity.district != null && activity.district!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.place_outlined,
+                      size: 18, color: Color(0xFF526663)),
+                  const SizedBox(width: 4),
+                  Text(activity.district!,
+                      style: const TextStyle(
+                          fontSize: 15, color: Color(0xFF526663))),
+                ],
+              ),
+            ],
+            if (activity.scheduleNote != null &&
+                activity.scheduleNote!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.schedule_outlined,
+                      size: 18, color: Color(0xFF526663)),
+                  const SizedBox(width: 4),
+                  Expanded(
+                      child: Text(activity.scheduleNote!,
+                          style: const TextStyle(
+                              fontSize: 15, color: Color(0xFF526663)))),
+                ],
+              ),
+            ],
+            if (activity.mobilityNote != null &&
+                activity.mobilityNote!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.accessible_outlined,
+                      size: 18, color: Color(0xFF526663)),
+                  const SizedBox(width: 4),
+                  Expanded(
+                      child: Text(activity.mobilityNote!,
+                          style: const TextStyle(
+                              fontSize: 15, color: Color(0xFF526663)))),
+                ],
+              ),
+            ],
+            if (activity.interestTags.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: activity.interestTags
+                    .map((tag) => Chip(
+                          label:
+                              Text(tag, style: const TextStyle(fontSize: 13)),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ))
+                    .toList(),
+              ),
+            ],
+            if (activity.url != null && activity.url!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final uri = Uri.tryParse(activity.url!);
+                  if (uri == null ||
+                      !await launchUrl(uri,
+                          mode: LaunchMode.externalApplication)) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(tr(context, '暫時未能開啟來源連結。',
+                              'Unable to open the source link right now.'))));
+                    }
+                  }
+                },
+                icon: const Icon(Icons.open_in_new_rounded, size: 20),
+                label: Text(tr(context, '開啟來源', 'Open source')),
+              ),
+            ],
+            if (onInterest != null) ...[
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: onInterest,
+                icon: Icon(isInterested
+                    ? Icons.check_circle_rounded
+                    : Icons.favorite_border_rounded),
+                label: Text(isInterested
+                    ? tr(context, '已表示感興趣', 'Interested')
+                    : tr(context, '表示感興趣', 'Express interest')),
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scam Safety (FR SCM 01-04)
+// ---------------------------------------------------------------------------
+
+class ScamSafetyScreen extends ConsumerStatefulWidget {
+  const ScamSafetyScreen({super.key});
+
+  @override
+  ConsumerState<ScamSafetyScreen> createState() => _ScamSafetyScreenState();
+}
+
+class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
+  final _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.microtask(() {
+      final controller = ref.read(appControllerProvider);
+      controller.refreshScamResources(silent: true);
+      controller.refreshVerifyActions(silent: true);
+      controller.refreshScamContacts(silent: true);
+      controller.refreshScamLogs(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = ref.watch(appControllerProvider);
+    return Scaffold(
+      appBar: AppBar(title: Text(tr(context, '防騙指引', 'Scam safety'))),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+        children: [
+          Text(tr(context, '核實、暫停、保護', 'Verify, Pause, Protect'),
+              style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 7),
+          Text(tr(context, '遇到可疑電話或訊息時，記住三個步驟。安心伴不會代你報警或自動聯絡家人。',
+              'When you receive a suspicious call or message, follow three steps. Anxin does not report to police or contact family automatically.')),
+          const SizedBox(height: 18),
+
+          // Three-step verify actions (FR SCM 02)
+          if (controller.verifyActions.isNotEmpty) ...[
+            ...controller.verifyActions.map((action) => Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(17, 15, 17, 15),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDDEDEA),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text('${action.step}',
+                              style: const TextStyle(
+                                  color: Color(0xFF116466),
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(action.title,
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 4),
+                              Text(action.description),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )),
+            const SizedBox(height: 18),
+          ],
+
+          // Verified contacts (FR SCM 03)
+          SectionTitle(title: tr(context, '已核實反詐騙聯絡', 'Verified contacts')),
+          const SizedBox(height: 9),
+          ...controller.scamContacts.map((contact) => Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 17, vertical: 6),
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFFDDEDEA),
+                    child: Icon(Icons.phone_in_talk_rounded,
+                        color: Color(0xFF116466)),
+                  ),
+                  title: Text(contact.name,
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.w700)),
+                  subtitle: contact.description != null
+                      ? Text(contact.description!)
+                      : null,
+                  trailing: FilledButton.icon(
+                    onPressed: () async {
+                      final launched = await launchUrl(Uri(
+                          scheme: 'tel',
+                          path: contact.phone.replaceAll(' ', '')));
+                      if (!launched && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(tr(context, '無法開啟電話。',
+                              'Could not open the phone app.')),
+                        ));
+                      }
+                    },
+                    icon: const Icon(Icons.call_rounded),
+                    label: Text(contact.phone),
+                  ),
+                ),
+              )),
+          const SizedBox(height: 18),
+
+          // Search scam resources (FR SCM 01)
+          SectionTitle(title: tr(context, '常見騙局指引', 'Scam guidance')),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  onSubmitted: (_) =>
+                      controller.searchScamResources(_searchController.text),
+                  decoration: InputDecoration(
+                    labelText: tr(context, '搜尋騙局類型', 'Search scam type'),
+                    prefixIcon: const Icon(Icons.search_rounded),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                tooltip: tr(context, '搜尋', 'Search'),
+                onPressed: () =>
+                    controller.searchScamResources(_searchController.text),
+                icon: const Icon(Icons.search_rounded),
+                style: IconButton.styleFrom(minimumSize: const Size(54, 54)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Scam resource cards
+          ...controller.scamResources
+              .map((resource) => ScamResourceCard(resource: resource)),
+
+          // Scam guidance history (FR SCM 04)
+          if (controller.isElder && controller.scamLogs.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            SectionTitle(title: tr(context, '指引記錄', 'Guidance history')),
+            const SizedBox(height: 9),
+            ...controller.scamLogs.map((log) => Card(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 17, vertical: 4),
+                    leading: const Icon(Icons.shield_outlined,
+                        color: Color(0xFF116466)),
+                    title: Text(log.scamType,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text(log.guidanceSummary.isEmpty
+                        ? tr(context, '已提供防騙指引', 'Scam guidance provided')
+                        : log.guidanceSummary),
+                  ),
+                )),
+          ],
+
+          if (controller.errorMessage != null) ...[
+            const SizedBox(height: 14),
+            ErrorBanner(message: controller.errorMessage!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class ScamResourceCard extends StatelessWidget {
+  const ScamResourceCard({required this.resource, super.key});
+
+  final ScamResource resource;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(17, 16, 17, 15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(resource.title,
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                if (resource.scamType != null)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFE5C1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(resource.scamType!,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF8B4E2D),
+                            fontWeight: FontWeight.w700)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (resource.verifiedAt != null)
+              Text(
+                tr(context, '資料核實：${_dateLabel(context, resource.verifiedAt)}',
+                    'Verified: ${_dateLabel(context, resource.verifiedAt)}'),
+                style: const TextStyle(fontSize: 15, color: Color(0xFF526663)),
+              ),
+            const SizedBox(height: 10),
+            Text(resource.excerpt),
+            if (resource.warningSigns.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(tr(context, '常見警號', 'Warning signs'),
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ...resource.warningSigns.map((sign) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 20, color: Color(0xFF8B4E2D)),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(sign)),
+                      ],
+                    ),
+                  )),
+            ],
+            if (resource.verificationSteps.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(tr(context, '核實步驟', 'Verification steps'),
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ...resource.verificationSteps
+                  .asMap()
+                  .entries
+                  .map((entry) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 24,
+                              height: 24,
+                              alignment: Alignment.center,
+                              decoration: const BoxDecoration(
+                                  color: Color(0xFFDDEDEA),
+                                  shape: BoxShape.circle),
+                              child: Text('${entry.key + 1}',
+                                  style: const TextStyle(
+                                      color: Color(0xFF116466),
+                                      fontWeight: FontWeight.w700)),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(child: Text(entry.value)),
+                          ],
+                        ),
+                      )),
+            ],
+            if (resource.nextSteps.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(tr(context, '你可以這樣做', 'Your next steps'),
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ...resource.nextSteps.map((step) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('•  ',
+                            style: TextStyle(color: Color(0xFF116466))),
+                        Expanded(child: Text(step)),
+                      ],
+                    ),
+                  )),
+            ],
+            if (resource.officialContacts.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: resource.officialContacts
+                    .map((contact) => ActionChip(
+                          label: Text(contact),
+                          avatar: const Icon(Icons.phone_outlined, size: 18),
+                          onPressed: () async {
+                            final tel =
+                                contact.replaceAll(RegExp(r'[^0-9]'), '');
+                            if (tel.isNotEmpty) {
+                              await launchUrl(Uri(scheme: 'tel', path: tel));
+                            }
+                          },
+                        ))
+                    .toList(),
+              ),
+            ],
+            if (resource.sourceUrl != null &&
+                resource.sourceUrl!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final uri = Uri.tryParse(resource.sourceUrl!);
+                  if (uri == null ||
+                      !await launchUrl(uri,
+                          mode: LaunchMode.externalApplication)) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(tr(context, '暫時未能開啟來源連結。',
+                              'Unable to open the source link right now.'))));
+                    }
+                  }
+                },
+                icon: const Icon(Icons.open_in_new_rounded, size: 20),
+                label: Text(tr(context, '開啟來源', 'Open source')),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+const _hongKongDistricts = <(String, String)>[
+  ('Central and Western', '中西區'),
+  ('Eastern', '東區'),
+  ('Southern', '南區'),
+  ('Wan Chai', '灣仔'),
+  ('Kowloon City', '九龍城'),
+  ('Kwun Tong', '觀塘'),
+  ('Sham Shui Po', '深水埗'),
+  ('Wong Tai Sin', '黃大仙'),
+  ('Yau Tsim Mong', '油尖旺'),
+  ('Islands', '離島'),
+  ('Kwai Tsing', '葵青'),
+  ('North', '北區'),
+  ('Sai Kung', '西貢'),
+  ('Sha Tin', '沙田'),
+  ('Tai Po', '大埔'),
+  ('Tsuen Wan', '荃灣'),
+  ('Tuen Mun', '屯門'),
+  ('Yuen Long', '元朗'),
+];

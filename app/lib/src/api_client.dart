@@ -5,6 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'models.dart';
+import 'care_features_api.dart';
+import 'care_models.dart';
+export 'care_features_api.dart';
 import 'group_models.dart';
 
 /// The server origin is replaceable at build/run time:
@@ -183,7 +186,8 @@ abstract interface class HumanGroupApi {
   Future<List<HumanGroup>> listHumanGroups();
   Future<List<HumanGroupInvitation>> listHumanGroupInvitations();
   Future<HumanGroup> createHumanGroup(String title);
-  Future<HumanGroupInvitation> inviteHumanGroupMember(String groupId, String email);
+  Future<HumanGroupInvitation> inviteHumanGroupMember(
+      String groupId, String email);
   Future<HumanGroup> acceptHumanGroupInvitation(String invitationId);
   Future<void> declineHumanGroupInvitation(String invitationId);
   Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId);
@@ -197,6 +201,43 @@ abstract interface class HumanGroupApi {
   Future<void> blockHumanGroupInvitations(String accountId);
 }
 
+abstract interface class CatalogScamApi {
+  // --- Community discovery (FR CMT 01-05) ---
+
+  Future<List<CatalogActivity>> listCatalogActivities({
+    String? district,
+    String? interest,
+    String? contributionType,
+  });
+
+  Future<List<CatalogActivity>> catalogRecommendations();
+
+  Future<void> expressCommunityInterest(String activityId);
+
+  Future<List<CatalogActivity>> listCommunityInterests();
+
+  Future<void> withdrawCommunityInterest(String activityId);
+
+  // --- Scam safety (FR SCM 01-04) ---
+
+  Future<List<ScamResource>> listScamResources({String? scamType});
+
+  Future<List<ScamResource>> searchScamResources(String query);
+
+  Future<List<VerifyAction>> getVerifyActions();
+
+  Future<List<ScamContact>> getScamContacts();
+
+  Future<void> logScamGuidance({
+    required String scamType,
+    required String guidanceSummary,
+    String? scamResourceId,
+    String? conversationId,
+  });
+
+  Future<List<ScamLogEntry>> listScamLogs();
+}
+
 class RestApiClient
     implements
         AnxinApi,
@@ -204,7 +245,10 @@ class RestApiClient
         ConsentApi,
         CommunityApi,
         MemorySaveApi,
-        GuestResourceApi, HumanGroupApi {
+        GuestResourceApi,
+        HumanGroupApi,
+        CareFeaturesApi,
+        CatalogScamApi {
   RestApiClient({
     String? origin,
     http.Client? client,
@@ -222,16 +266,19 @@ class RestApiClient
   @override
   Future<List<HumanGroup>> listHumanGroups() async =>
       mapsFromJson(await _request('GET', '/groups'))
-          .map(HumanGroup.fromJson).toList(growable: false);
+          .map(HumanGroup.fromJson)
+          .toList(growable: false);
 
   @override
   Future<List<HumanGroupInvitation>> listHumanGroupInvitations() async =>
       mapsFromJson(await _request('GET', '/groups/invitations'))
-          .map(HumanGroupInvitation.fromJson).toList(growable: false);
+          .map(HumanGroupInvitation.fromJson)
+          .toList(growable: false);
 
   @override
-  Future<HumanGroup> createHumanGroup(String title) async => HumanGroup.fromJson(
-      mapFromJson(await _request('POST', '/groups', body: {'title': title}))!);
+  Future<HumanGroup> createHumanGroup(String title) async =>
+      HumanGroup.fromJson(mapFromJson(
+          await _request('POST', '/groups', body: {'title': title}))!);
 
   @override
   Future<HumanGroupInvitation> inviteHumanGroupMember(
@@ -254,14 +301,17 @@ class RestApiClient
   @override
   Future<List<HumanGroupMember>> listHumanGroupMembers(String groupId) async =>
       mapsFromJson(await _request(
-          'GET', '/groups/${Uri.encodeComponent(groupId)}/members'))
-          .map(HumanGroupMember.fromJson).toList(growable: false);
+              'GET', '/groups/${Uri.encodeComponent(groupId)}/members'))
+          .map(HumanGroupMember.fromJson)
+          .toList(growable: false);
 
   @override
-  Future<List<HumanGroupMessage>> listHumanGroupMessages(String groupId) async =>
+  Future<List<HumanGroupMessage>> listHumanGroupMessages(
+          String groupId) async =>
       mapsFromJson(await _request(
-          'GET', '/groups/${Uri.encodeComponent(groupId)}/messages'))
-          .map(HumanGroupMessage.fromJson).toList(growable: false);
+              'GET', '/groups/${Uri.encodeComponent(groupId)}/messages'))
+          .map(HumanGroupMessage.fromJson)
+          .toList(growable: false);
 
   @override
   Stream<HumanGroupLiveEvent> watchHumanGroupMessages(String groupId) {
@@ -277,8 +327,8 @@ class RestApiClient
       while (!cancelled) {
         final token = accessToken;
         if (token == null || token.isEmpty) {
-          controller.add(const HumanGroupLiveEvent(
-              HumanGroupLiveEventType.accessRevoked));
+          controller.add(
+              const HumanGroupLiveEvent(HumanGroupLiveEventType.accessRevoked));
           await controller.close();
           return;
         }
@@ -331,8 +381,8 @@ class RestApiClient
             }
           }, onDone: () {
             if (!authenticated.isCompleted) {
-              authenticated.completeError(
-                  StateError('The group connection closed before authentication.'));
+              authenticated.completeError(StateError(
+                  'The group connection closed before authentication.'));
             }
             if (!disconnectedAttempt.isCompleted) {
               disconnectedAttempt.complete(openedChannel.closeCode);
@@ -341,8 +391,8 @@ class RestApiClient
           openedChannel.sink.add(jsonEncode({'type': 'auth', 'token': token}));
           await authenticated.future.timeout(const Duration(seconds: 10));
           if (cancelled) break;
-          controller.add(const HumanGroupLiveEvent(
-              HumanGroupLiveEventType.connected));
+          controller.add(
+              const HumanGroupLiveEvent(HumanGroupLiveEventType.connected));
           final connectedAt = DateTime.now();
 
           final closeCode = await disconnectedAttempt.future;
@@ -385,8 +435,8 @@ class RestApiClient
 
         if (cancelled) return;
         if (!controller.isClosed) {
-          controller.add(const HumanGroupLiveEvent(
-              HumanGroupLiveEventType.reconnecting));
+          controller.add(
+              const HumanGroupLiveEvent(HumanGroupLiveEventType.reconnecting));
         }
         final wake = Completer<void>();
         retryWake = wake;
@@ -425,7 +475,7 @@ class RestApiClient
 
   @override
   Future<HumanGroupMessage> sendHumanGroupMessage(
-      String groupId, String content, String clientMessageId) async =>
+          String groupId, String content, String clientMessageId) async =>
       HumanGroupMessage.fromJson(mapFromJson(await _request(
           'POST', '/groups/${Uri.encodeComponent(groupId)}/messages',
           body: {'content': content, 'client_message_id': clientMessageId}))!);
@@ -449,6 +499,239 @@ class RestApiClient
   @override
   Future<void> blockHumanGroupInvitations(String accountId) async {
     await _request('POST', '/groups/blocks', body: {'account_id': accountId});
+  }
+
+  @override
+  Future<CheckInSchedule?> getCheckInSchedule() async {
+    final body = await _request('GET', '/check-ins/schedule');
+    if (body == null) return null;
+    return CheckInSchedule.fromJson(_requireCareObject(body));
+  }
+
+  @override
+  Future<CheckInSchedule> saveCheckInSchedule(CheckInSchedule schedule) async {
+    final body =
+        await _request('PUT', '/check-ins/schedule', body: schedule.toJson());
+    return CheckInSchedule.fromJson(_requireCareObject(body));
+  }
+
+  @override
+  Future<void> skipCheckInToday() async {
+    await _request('POST', '/check-ins/skip');
+  }
+
+  @override
+  Future<CheckInTriggerResult> triggerCheckIn() async {
+    final body = await _request('POST', '/check-ins/trigger', body: {});
+    return CheckInTriggerResult.fromJson(_requireCareObject(body));
+  }
+
+  @override
+  Future<List<CareNotification>> listNotifications() async {
+    final body = await _request('GET', '/notifications');
+    return mapsFromJson(body).map(CareNotification.fromJson).toList();
+  }
+
+  @override
+  Future<CareNotification> updateNotification({
+    required String notificationId,
+    required CareNotificationAction status,
+  }) async {
+    final body = await _request(
+      'PATCH',
+      '/notifications/${Uri.encodeComponent(notificationId)}',
+      body: {'status': status.name},
+    );
+    return CareNotification.fromJson(_requireCareObject(body));
+  }
+
+  @override
+  Future<List<EmergencyContact>> listEmergencyContacts() async {
+    final body = await _request('GET', '/safety/emergency-contacts');
+    return mapsFromJson(body).map(EmergencyContact.fromJson).toList();
+  }
+
+  @override
+  Future<EmergencyContact> addEmergencyContact({
+    required String familyLinkId,
+    required String label,
+  }) async {
+    final body = await _request('POST', '/safety/emergency-contacts', body: {
+      'family_link_id': familyLinkId,
+      'label': label,
+    });
+    return EmergencyContact.fromJson(_requireCareObject(body));
+  }
+
+  @override
+  Future<void> deleteEmergencyContact(String contactId) async {
+    await _request('DELETE',
+        '/safety/emergency-contacts/${Uri.encodeComponent(contactId)}');
+  }
+
+  @override
+  Future<List<SafetyEvent>> listSafetyEvents() async {
+    final body = await _request('GET', '/safety/events');
+    return mapsFromJson(body).map(SafetyEvent.fromJson).toList();
+  }
+
+  @override
+  Future<void> sendSupportRequest({
+    required String emergencyContactId,
+    required String message,
+    required String idempotencyKey,
+    String? safetyEventId,
+  }) async {
+    if (idempotencyKey.trim().isEmpty) {
+      throw ArgumentError.value(
+          idempotencyKey, 'idempotencyKey', 'Must not be empty');
+    }
+    await _request('POST', '/safety/support-request',
+        body: {
+          'emergency_contact_id': emergencyContactId,
+          'message': message,
+          'idempotency_key': idempotencyKey,
+          'safety_event_id': safetyEventId,
+        },
+        idempotencyKey: idempotencyKey);
+  }
+
+  static Map<String, dynamic> _requireCareObject(Object? body) {
+    final map = mapFromJson(body);
+    if (map == null) {
+      throw const ApiException(
+          'The care service returned an incomplete response.');
+    }
+    return map;
+  }
+
+  // --- Community discovery (FR CMT 01-05) ---
+
+  @override
+  Future<List<CatalogActivity>> listCatalogActivities({
+    String? district,
+    String? interest,
+    String? contributionType,
+  }) async {
+    final params = <String, String>{};
+    if (district != null && district.isNotEmpty) params['district'] = district;
+    if (interest != null && interest.isNotEmpty) params['interest'] = interest;
+    if (contributionType != null && contributionType.isNotEmpty) {
+      params['contribution_type'] = contributionType;
+    }
+    final path = params.isEmpty
+        ? '/community/catalog/activities'
+        : '/community/catalog/activities?${params.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+    final body = await _request('GET', path);
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['activities'] ?? map);
+    return list
+        .map(CatalogActivity.fromJson)
+        .where((a) => a.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<List<CatalogActivity>> catalogRecommendations() async {
+    final body = await _request('GET', '/community/catalog/recommendations');
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['recommendations'] ?? map);
+    return list
+        .map(CatalogActivity.fromJson)
+        .where((a) => a.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<void> expressCommunityInterest(String activityId) async {
+    await _request('POST',
+        '/community/catalog/interest/${Uri.encodeComponent(activityId)}');
+  }
+
+  @override
+  Future<List<CatalogActivity>> listCommunityInterests() async {
+    final body = await _request('GET', '/community/catalog/interests');
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['interests'] ?? map);
+    return list
+        .map(CatalogActivity.fromJson)
+        .where((a) => a.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<void> withdrawCommunityInterest(String activityId) async {
+    await _request('DELETE',
+        '/community/catalog/interest/${Uri.encodeComponent(activityId)}');
+  }
+
+  // --- Scam safety (FR SCM 01-04) ---
+
+  @override
+  Future<List<ScamResource>> listScamResources({String? scamType}) async {
+    final path = scamType != null && scamType.isNotEmpty
+        ? '/scam/resources?scam_type=${Uri.encodeComponent(scamType)}'
+        : '/scam/resources';
+    final body = await _request('GET', path);
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['resources'] ?? map);
+    return list
+        .map(ScamResource.fromJson)
+        .where((r) => r.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<List<ScamResource>> searchScamResources(String query) async {
+    final body = await _request(
+      'GET',
+      '/scam/resources/search?query=${Uri.encodeComponent(query)}',
+    );
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['results'] ?? map);
+    return list
+        .map(ScamResource.fromJson)
+        .where((r) => r.id.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<List<VerifyAction>> getVerifyActions() async {
+    final body = await _request('GET', '/scam/verify-actions');
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['actions'] ?? map);
+    return list.map(VerifyAction.fromJson).toList();
+  }
+
+  @override
+  Future<List<ScamContact>> getScamContacts() async {
+    final body = await _request('GET', '/scam/contacts');
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['contacts'] ?? map);
+    return list.map(ScamContact.fromJson).toList();
+  }
+
+  @override
+  Future<void> logScamGuidance({
+    required String scamType,
+    required String guidanceSummary,
+    String? scamResourceId,
+    String? conversationId,
+  }) async {
+    await _request('POST', '/scam/log', body: {
+      'scam_type': scamType,
+      'guidance_summary': guidanceSummary,
+      if (scamResourceId != null) 'scam_resource_id': scamResourceId,
+      if (conversationId != null) 'conversation_id': conversationId,
+    });
+  }
+
+  @override
+  Future<List<ScamLogEntry>> listScamLogs() async {
+    final body = await _request('GET', '/scam/log');
+    final map = mapFromJson(body) ?? const <String, dynamic>{};
+    final list = mapsFromJson(map['logs'] ?? map);
+    return list.map(ScamLogEntry.fromJson).toList();
   }
 
   Future<bool?> readDemoMode() async {
@@ -548,8 +831,7 @@ class RestApiClient
       'kind': kind,
       if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
         'source_message_id': sourceMessageId,
-      if (topicKey != null && topicKey.trim().isNotEmpty)
-        'topic_key': topicKey,
+      if (topicKey != null && topicKey.trim().isNotEmpty) 'topic_key': topicKey,
     });
     return _requireMemory(body);
   }
@@ -625,7 +907,8 @@ class RestApiClient
       'https' => 'wss',
       'http' => 'ws',
       'ws' || 'wss' => uri.scheme,
-      _ => throw FormatException('Unsupported API origin scheme: ${uri.scheme}'),
+      _ =>
+        throw FormatException('Unsupported API origin scheme: ${uri.scheme}'),
     };
     return uri.replace(scheme: scheme, query: null, fragment: null);
   }

@@ -267,5 +267,606 @@
       "Tuen Mun",
       "Yuen Long"
     ]
+  },
+  {
+    "id": "decc-central-western-2026",
+    "title": "中西區地區長者中心",
+    "excerpt": "中西區地區長者中心為區內長者提供社交、興趣、健康教育、外展探訪及個案管理服務。中心定期舉辦書法、太極、合唱團、手工藝等興趣小組，並設有營養午餐、健康講座及戶外活動。行動不便的長者可申請外展及陪診服務轉介。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "部分興趣班及活動需提前報名，名額有限。",
+      "外展及陪診服務需經社工評估轉介。"
+    ],
+    "missing_information": [
+      "長者所在具體地址及活動能力尚未知道。",
+      "偏好興趣小組及活動時間尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動時間表及報名方式。",
+      "到訪前確認開放時間及所需文件（如身分證明）。",
+      "如需外展服務，請社工協助評估及轉介。"
+    ],
+    "search_terms": [
+      "中西區長者中心",
+      "Central and Western elderly centre",
+      "DECC Central and Western",
+      "太極班",
+      "書法班",
+      "興趣小組"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Central and Western"]
+  },
+  {
+    "id": "decc-eastern-2026",
+    "title": "東區地區長者中心",
+    "excerpt": "東區地區長者中心為區內長者提供社交活動、健康教育、義工發展、護老者支援及個案管理。中心設有書畫、舞蹈、電腦、手機應用教學等興趣班，亦舉辦季度健康檢查及戶外考察。行動不便長者可安排外展探訪。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "興趣班名額有限，需提前報名。"
+    ],
+    "missing_information": [
+      "長者偏好興趣及時間尚未知道。",
+      "活動能力及無障礙需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動時間表。",
+      "到訪前確認報名方式及所需文件。",
+      "如需外展服務，請社工評估。"
+    ],
+    "search_terms": [
+      "東區長者中心",
+      "Eastern elderly centre",
+      "DECC Eastern",
+      "舞蹈班",
+      "電腦班",
+      "手機應用"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Eastern"]
+  },
+  {
+    "id": "decc-kwun-tong-2026",
+    "title": "觀塘地區長者中心",
+    "excerpt": "觀塘地區長者中心服務區內長者，提供社交康樂、健康教育、義工培訓、護老者支援及個案跟進。中心定期舉辦太極、書法、園藝、編織、健康體操等活動，並設有營養指導及社區健康教育。行動不便長者可申請外展探訪。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "活動名額有限，需提前報名。"
+    ],
+    "missing_information": [
+      "偏好興趣及活動時間尚未知道。",
+      "活動能力及無障礙需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢活動時間表及報名方式。",
+      "到訪前確認開放時間及所需文件。",
+      "如需外展服務，請社工協助轉介。"
+    ],
+    "search_terms": [
+      "觀塘長者中心",
+      "Kwun Tong elderly centre",
+      "DECC Kwun Tong",
+      "太極班",
+      "園藝班",
+      "健康體操"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Kwun Tong"]
+  },
+  {
+    "id": "decc-sha-tin-2026",
+    "title": "沙田地區長者中心",
+    "excerpt": "沙田地區長者中心為區內長者提供社交活動、興趣小組、健康教育、護老者支援及個案管理。中心設有書法、國畫、合唱、烹飪、手機應用教學等興趣班，並定期舉辦健康講座、季節性戶外活動及節日慶祝。行動不便長者可申請外展服務。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "興趣班需提前報名，名額有限。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "活動能力及交通安排尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動時間表。",
+      "到訪前確認報名方式及所需文件。",
+      "如需交通或外展支援，請社工協助。"
+    ],
+    "search_terms": [
+      "沙田長者中心",
+      "Sha Tin elderly centre",
+      "DECC Sha Tin",
+      "國畫班",
+      "合唱團",
+      "烹飪班"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Sha Tin"]
+  },
+  {
+    "id": "decc-tuen-mun-2026",
+    "title": "屯門地區長者中心",
+    "excerpt": "屯門地區長者中心服務區內長者，提供社交康樂、健康教育、興趣小組、護老者支援及個案管理。中心定期舉辦太極、書法、手工藝、健康體操、舞蹈等活動，並設有營養午餐及健康檢查。行動不便長者可安排外展探訪及陪診轉介。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "活動名額有限，需提前報名。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "活動能力及無障礙需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢活動時間表及報名方式。",
+      "到訪前確認開放時間及所需文件。",
+      "如需外展或陪診服務，請社工評估轉介。"
+    ],
+    "search_terms": [
+      "屯門長者中心",
+      "Tuen Mun elderly centre",
+      "DECC Tuen Mun",
+      "手工藝班",
+      "健康體操",
+      "舞蹈班"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Tuen Mun"]
+  },
+  {
+    "id": "decc-yuen-long-2026",
+    "title": "元朗地區長者中心",
+    "excerpt": "元朗地區長者中心為區內長者提供社交活動、興趣小組、健康教育、護老者支援及個案跟進。中心設有書法、太極、合唱、園藝、手機應用教學等興趣班，並定期舉辦健康講座及社區教育。行動不便或偏遠地區長者可申請外展服務。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "偏遠鄉郊地區可查詢外展服務覆蓋範圍。"
+    ],
+    "missing_information": [
+      "長者具體地址及交通安排尚未知道。",
+      "偏好興趣及活動能力尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動及外展覆蓋範圍。",
+      "到訪前確認報名方式及所需文件。",
+      "如需交通支援，請社工協助。"
+    ],
+    "search_terms": [
+      "元朗長者中心",
+      "Yuen Long elderly centre",
+      "DECC Yuen Long",
+      "園藝班",
+      "合唱團",
+      "太極班"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Yuen Long"]
+  },
+  {
+    "id": "nec-wan-chai-2026",
+    "title": "灣仔鄰舍長者中心",
+    "excerpt": "灣仔鄰舍長者中心為區內長者提供鄰舍層面的社交、興趣、健康教育及外展探訪。中心定期舉辦書法、太極、手工藝、健康體操等興趣小組，並設有營養指導及社區健康講座。行動不便長者可申請外展探訪。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/nec/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "活動名額有限，需提前報名。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "活動能力及無障礙需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動時間表。",
+      "到訪前確認報名方式及所需文件。",
+      "如需外展服務，請社工協助。"
+    ],
+    "search_terms": [
+      "灣仔長者中心",
+      "Wan Chai elderly centre",
+      "NEC Wan Chai",
+      "手工藝班",
+      "健康體操",
+      "鄰舍長者中心"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Wan Chai"]
+  },
+  {
+    "id": "nec-sham-shui-po-2026",
+    "title": "深水埗鄰舍長者中心",
+    "excerpt": "深水埗鄰舍長者中心為區內長者提供社交活動、興趣小組、健康教育及外展探訪。中心設有書法、太極、編織、手機應用教學等興趣班，並定期舉辦健康檢查及季節性戶外活動。低收入長者可查詢費用減免安排。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/nec/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "部分活動設有費用減免，須經社工評估。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "收入狀況及費用減免需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢活動時間表及費用減免安排。",
+      "到訪前確認報名方式及所需文件。",
+      "如需費用減免，請社工協助評估。"
+    ],
+    "search_terms": [
+      "深水埗長者中心",
+      "Sham Shui Po elderly centre",
+      "NEC Sham Shui Po",
+      "編織班",
+      "太極班",
+      "手機應用"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Sham Shui Po"]
+  },
+  {
+    "id": "nec-wong-tai-sin-2026",
+    "title": "黃大仙鄰舍長者中心",
+    "excerpt": "黃大仙鄰舍長者中心為區內長者提供社交康樂、興趣小組、健康教育、護老者支援及個案跟進。中心定期舉辦書法、國畫、舞蹈、健康體操、手機應用教學等活動，並設有營養指導及節日慶祝。行動不便長者可安排外展探訪。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/nec/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民或會員。",
+      "活動名額有限，需提前報名。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "活動能力及無障礙需要尚未知道。"
+    ],
+    "next_steps": [
+      "致電中心查詢近期活動時間表。",
+      "到訪前確認報名方式及所需文件。",
+      "如需外展服務，請社工協助。"
+    ],
+    "search_terms": [
+      "黃大仙長者中心",
+      "Wong Tai Sin elderly centre",
+      "NEC Wong Tai Sin",
+      "國畫班",
+      "舞蹈班",
+      "健康體操"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": ["Wong Tai Sin"]
+  },
+  {
+    "id": "swd-elderly-health-centre-2026",
+    "title": "衞生署長者健康中心",
+    "excerpt": "衞生署長者健康中心為65歲或以上長者提供健康評估、慢性病管理、疫苗注射、健康教育和輔導。中心設有護士診所、營養指導、物理治療及職業治療轉介。每年繳交會費後可使用服務；綜援受助人可獲豁免會費。",
+    "url": "https://www.elderly.gov.hk/english/health/health_centres.html",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須年滿65歲並為香港居民。",
+      "須每年繳交會費；綜援受助人可獲豁免。",
+      "須親身到中心登記並提供身分證明。"
+    ],
+    "missing_information": [
+      "長者年齡、居住地及綜援狀態尚未知道。",
+      "偏好健康中心地點尚未知道。"
+    ],
+    "next_steps": [
+      "致電就近的長者健康中心查詢登記安排。",
+      "帶同身分證明及綜援證明（如適用）親身登記。",
+      "登記後預約首次健康評估。"
+    ],
+    "search_terms": [
+      "長者健康中心",
+      "elderly health centre",
+      "長者健康服務",
+      "health assessment",
+      "chronic disease management",
+      "疫苗注射",
+      "護士診所"
+    ],
+    "category": "health_service",
+    "source_authority": "Department of Health",
+    "districts": []
+  },
+  {
+    "id": "swd-active-ageing-2026",
+    "title": "社區照顧服務——活力長者計劃",
+    "excerpt": "各區地區長者中心及鄰舍長者中心均設有活力長者計劃，鼓勵長者參與社交、興趣、義工及社區活動。計劃包括社交小組、興趣班、義工培訓、戶外活動及節日慶祝。所有年滿60歲的區內長者均可參加，不受收入或資產限制。",
+    "url": "https://www.swd.gov.hk/en/pubsvc/elderly/cat_commcare/decc/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "須為年滿60歲的區內居民。",
+      "活動名額有限，需提前報名。",
+      "不受收入或資產限制。"
+    ],
+    "missing_information": [
+      "偏好興趣及時間尚未知道。",
+      "所在區域尚未知道。"
+    ],
+    "next_steps": [
+      "致電就近的地區或鄰舍長者中心查詢活動時間表。",
+      "到訪前確認報名方式及所需文件。",
+      "如需交通或外展支援，請社工協助。"
+    ],
+    "search_terms": [
+      "活力長者",
+      "active ageing",
+      "長者社交活動",
+      "興趣班",
+      "義工",
+      "戶外活動"
+    ],
+    "category": "community_directory",
+    "source_authority": "Social Welfare Department",
+    "districts": []
+  },
+  {
+    "id": "mtr-journey-planner",
+    "title": "港鐵旅程規劃及無障礙設施",
+    "excerpt": "港鐵網站提供行程規劃工具，可查詢車程時間、轉乘建議及車費。港鐵各車站均設有無障礙設施，包括升降機、斜道、闊閘機及觸覺引路帶。長者使用成人八達通可享半價優惠；65歲或以上長者可申請長者八達通，享$2乘車優惠。車站亦提供關愛座、乘客資訊顯示屏及無障礙通道。",
+    "url": "https://www.mtr.com.hk/ch/customer/main/jp.html",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "65歲或以上長者可使用長者八達通享有$2乘車優惠。",
+      "無障礙設施包括升降機、斜道、闊閘機、觸覺引路帶及車站無障礙通道。",
+      "長者乘車優惠適用於港鐵本地路線（機場快綫及跨境綫除外）。",
+      "行程規劃工具可在港鐵網站或MTR手機應用程式使用。"
+    ],
+    "missing_information": [
+      "長者所在位置及目的地尚未知道。",
+      "偏好路線、轉乘需要及無障礙要求尚未知道。",
+      "是否已有長者八達通或需要申請尚未知道。"
+    ],
+    "next_steps": [
+      "使用港鐵網站旅程規劃工具或MTR應用程式查詢路線。",
+      "如需無障礙設施，查看車站設施資料或致電港鐵熱線2881 8888。",
+      "如未持有長者八達通，可到港鐵客務中心申請。"
+    ],
+    "search_terms": [
+      "MTR",
+      "港鐵",
+      "journey planner",
+      "行程規劃",
+      "長者乘車優惠",
+      "無障礙設施",
+      "accessible transport",
+      "public transport",
+      "公共交通",
+      "地鐵"
+    ],
+    "category": "transport_navigation",
+    "source_authority": "MTR Corporation",
+    "districts": []
+  },
+  {
+    "id": "transport-rehabus-2026",
+    "title": "復康巴士服務（易達乘車）",
+    "excerpt": "香港復康會營運的復康巴士為行動不便人士提供點對點接送服務，包括固定路線、電召服務及聯載服務。服務對象為需要使用輪椅或有行動困難的人士。乘客需事先登記為會員並通過資格評估。服務覆蓋港九新界，並設有無障礙車輛。長者可透過地區長者中心或社工轉介申請。",
+    "url": "https://www.hkab.org.hk/zh-hk/rehabus",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "服務對象為行動不便人士，包括需要使用輪椅者。",
+      "需事先登記為會員並通過資格評估。",
+      "固定路線服務按班次時間運行；電召服務需提前預約。",
+      "服務收費按路程計算，綜援受助人可申請費用減免。"
+    ],
+    "missing_information": [
+      "長者行動能力及是否需要輪椅尚未知道。",
+      "所在地區及常用目的地尚未知道。",
+      "是否已登記為會員或需要轉介尚未知道。"
+    ],
+    "next_steps": [
+      "致電復康巴士查詢熱線2817 9157了解登記程序。",
+      "透過地區長者中心或社工協助申請會員資格。",
+      "登記後可預約電召服務或查看固定路線時間表。"
+    ],
+    "search_terms": [
+      "Rehabus",
+      "復康巴士",
+      "accessible transport",
+      "無障礙交通",
+      "輪椅接送",
+      "易達乘車",
+      "行動不便",
+      "點對點接送",
+      "transport for disabled",
+      "mobility transport"
+    ],
+    "category": "transport_navigation",
+    "source_authority": "Hong Kong Society for Rehabilitation",
+    "districts": []
+  },
+  {
+    "id": "transport-bus-info-2026",
+    "title": "專營巴士長者優惠及路線查詢",
+    "excerpt": "香港各專營巴士公司為65歲或以上長者提供$2乘車優惠。長者可使用長者八達通享用優惠。各巴士公司網站提供路線查詢、到站時間及轉乘建議。九巴、城巴及新巴均設有手機應用程式，提供實時到站資訊。巴士車隊逐步引入低地台巴士，方便長者及行動不便乘客上落。",
+    "url": "https://www.td.gov.hk/tc/transport_in_hong_kong/public_transport/bus/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "65歲或以上長者使用長者八達通可享$2乘車優惠。",
+      "優惠適用於九巴、城巴、新巴及龍運巴士本地路線。",
+      "低地台巴士提供無障礙上落，但並非所有路線均全面採用。",
+      "實時到站資訊可透過各巴士公司手機應用程式查詢。"
+    ],
+    "missing_information": [
+      "長者常用巴士路線及目的地尚未知道。",
+      "所在地區及偏好巴士站尚未知道。",
+      "是否已有長者八達通尚未知道。"
+    ],
+    "next_steps": [
+      "下載九巴App1933或城巴手機應用程式查詢路線及到站時間。",
+      "在八達通服務站或巴士公司客務中心申請長者八達通。",
+      "如需無障礙路線資料，向巴士公司查詢低地台巴士班次。"
+    ],
+    "search_terms": [
+      "bus",
+      "巴士",
+      "長者乘車優惠",
+      "$2乘車優惠",
+      "九巴",
+      "城巴",
+      "新巴",
+      "路線查詢",
+      "到站時間",
+      "低地台巴士",
+      "accessible bus"
+    ],
+    "category": "transport_navigation",
+    "source_authority": "Transport Department",
+    "districts": []
+  },
+  {
+    "id": "ha-service-guide-2026",
+    "title": "醫院管理局服務指南",
+    "excerpt": "醫院管理局服務指南提供公立醫院及診所的服務資訊，包括急症室、專科門診、普通科門診、住院及日間服務的地址、電話、服務時間及預約方法。長者可透過HA Go應用程式預約普通科門診、查看輪候時間及管理預約。HA Go亦提供繳費、藥物提醒及查看化驗報告等功能。",
+    "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "公立醫院服務按身份及資格收費；綜援及高齡津貼受助人可獲費用減免。",
+      "普通科門診可透過HA Go應用程式預約，先到先得。",
+      "專科門診需由普通科醫生或其他專科醫生轉介。",
+      "急症室按病情嚴重程度分流，非緊急個案可能需要長時間輪候。"
+    ],
+    "missing_information": [
+      "長者所需服務類型（急症、專科、普通科門診）尚未知道。",
+      "所在地區及偏好醫院或診所尚未知道。",
+      "是否已登記醫管局身份及是否有轉介信尚未知道。"
+    ],
+    "next_steps": [
+      "下載HA Go應用程式預約普通科門診或管理現有預約。",
+      "如需專科服務，先到普通科門診求診並請醫生轉介。",
+      "急症請致電999或前往最近急症室。"
+    ],
+    "search_terms": [
+      "Hospital Authority",
+      "醫院管理局",
+      "HA Go",
+      "service guide",
+      "服務指南",
+      "clinic",
+      "門診",
+      "specialist outpatient",
+      "專科門診",
+      "GOPC",
+      "普通科門診",
+      "appointment booking",
+      "預約",
+      "healthcare navigation",
+      "醫療導航"
+    ],
+    "category": "healthcare_navigation",
+    "source_authority": "Hospital Authority",
+    "districts": []
+  },
+  {
+    "id": "dh-health-hotline-2026",
+    "title": "衞生署24小時健康教育熱線",
+    "excerpt": "衞生署健康教育熱線2828 0228提供24小時健康資訊查詢服務，由註冊護士接聽。服務涵蓋疾病預防、健康飲食、疫苗接種、精神健康及長者健康資訊。長者可查詢最近的長者健康中心、母嬰健康院及皮膚科診所等衞生署服務。熱線亦提供戒煙輔導及愛滋病病毒測試查詢。",
+    "url": "https://www.cheu.gov.hk/",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "健康教育熱線由註冊護士24小時接聽，提供健康資訊及服務查詢。",
+      "熱線提供健康教育資訊，不提供診斷或治療建議。",
+      "如有緊急醫療需要，應致電999或前往急症室。"
+    ],
+    "missing_information": [
+      "長者健康查詢的具體內容尚未知道。",
+      "所在地區及偏好服務點尚未知道。"
+    ],
+    "next_steps": [
+      "致電健康教育熱線2828 0228查詢健康資訊或服務地點。",
+      "如需門診服務，透過HA Go預約或到普通科門診求診。",
+      "如屬緊急情況，致電999或前往最近急症室。"
+    ],
+    "search_terms": [
+      "health hotline",
+      "健康教育熱線",
+      "24 hour health",
+      "24小時健康熱線",
+      "health enquiry",
+      "health information",
+      "健康資訊",
+      "衞生署",
+      "Department of Health",
+      "nurse hotline",
+      "護士熱線",
+      "healthcare navigation",
+      "醫療導航"
+    ],
+    "category": "healthcare_navigation",
+    "source_authority": "Department of Health",
+    "districts": []
+  },
+  {
+    "id": "ha-gopc-registration-2026",
+    "title": "普通科門診登記及預約",
+    "excerpt": "醫院管理局普通科門診為香港居民提供基層醫療服務，包括常見疾病診治、慢性病跟進、預防注射及健康教育。長者可透過HA Go應用程式預約門診，名額先到先得。綜援及高齡津貼受助人可獲費用減免。門診亦提供藥物配發、化驗及轉介專科服務。部分診所設有長者優先籌，但需提早取籌。",
+    "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp?Content_ID=100826",
+    "verified_at": "2026-09-20",
+    "effective_date": null,
+    "conditions": [
+      "普通科門診為合資格香港居民提供服務。",
+      "預約可透過HA Go應用程式或電話預約系統辦理，名額有限。",
+      "綜援及75歲以上高齡津貼受助人可獲費用減免。",
+      "慢性病跟進需定期覆診；藥物配發在診所藥房或指定藥房領取。"
+    ],
+    "missing_information": [
+      "長者是否已登記醫管局身份尚未知道。",
+      "所需門診類型（新症、覆診、跟進）尚未知道。",
+      "所在地區及偏好診所尚未知道。"
+    ],
+    "next_steps": [
+      "下載HA Go應用程式預約最近的普通科門診。",
+      "攜帶身分證明及綜援或高齡津貼證明（如適用）到診所登記。",
+      "如需費用減免，向醫務社工查詢申請程序。"
+    ],
+    "search_terms": [
+      "GOPC",
+      "general outpatient clinic",
+      "普通科門診",
+      "clinic appointment",
+      "門診預約",
+      "HA Go",
+      "primary care",
+      "基層醫療",
+      "clinic registration",
+      "診所登記",
+      "healthcare navigation",
+      "醫療導航",
+      "chronic disease follow up",
+      "慢性病覆診"
+    ],
+    "category": "healthcare_navigation",
+    "source_authority": "Hospital Authority",
+    "districts": []
   }
 ]

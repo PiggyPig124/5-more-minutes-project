@@ -21,6 +21,86 @@ import httpx
 from .config import Settings
 
 
+# ---------------------------------------------------------------------------
+# Urgent-risk detection (server-side, mirrors the Flutter safety.dart regex)
+# ---------------------------------------------------------------------------
+
+_negated_risk = re.compile(
+    r"\b(?:not|never|don't|do not|didn't|did not)\b.{0,36}?\b(?:suicidal|want to die|kill myself|hurt myself|end my life)\b",
+    re.IGNORECASE,
+)
+
+_direct_risk = re.compile(
+    r"\b(?:i(?:'m| am)?\s+(?:suicidal|going to kill myself|going to hurt myself|thinking about hurting myself)|i\s+(?:want to die|don't want to live|do not want to live|want to kill myself|think about suicide|have been thinking about suicide|plan to (?:die|kill myself|hurt myself)|might hurt myself|will hurt myself|want to end my life))\b",
+    re.IGNORECASE,
+)
+
+_chinese_negated_risk = re.compile(
+    r"(?:(?:沒有|没|唔會|唔会|不會|不会|不曾|冇諗過|沒有想過).{0,8}?(?:想死|想自殺|想自杀|自殺|自杀|傷害自己|伤害自己)|(?:不想|唔想)(?:自殺|自杀|傷害自己|伤害自己))",
+)
+
+_chinese_direct_risk = re.compile(
+    r"(?:我.{0,5}(?:想死|不想活|唔想活|想自殺|想自杀|要自殺|要自杀|想傷害自己|想伤害自己|有自殺念頭|有自杀念头)|(?:不想活|唔想活|想自殺|想自杀|要自殺|要自杀))",
+)
+
+
+def detect_urgent_risk(message: str) -> bool:
+    """Return True only for a direct, non-negated risk statement.
+
+    This is the server-side mirror of the Flutter ``safety.dart`` regex set.
+    It intentionally avoids broad keyword matching: ``suicide`` mentioned in a
+    news story or a negation (``I'm not suicidal``) must not trigger an
+    intervention.  The function is called from the orchestrator's safety node
+    before the model adapter runs.
+    """
+
+    # Negation applies to its own clause, never to a later disclosure.
+    clauses = re.split(
+        r"[\n.!?;,。！？；，]|\b(?:but|however|yet|and)\b|但是|但|不過|不过|可是|然而|而且",
+        message.replace("’", "'"),
+        flags=re.IGNORECASE,
+    )
+    for clause in clauses:
+        negations = [
+            match.span()
+            for pattern in (_negated_risk, _chinese_negated_risk)
+            for match in pattern.finditer(clause)
+        ]
+        for pattern in (_direct_risk, _chinese_direct_risk):
+            for match in pattern.finditer(clause):
+                if not any(start < match.end() and end > match.start() for start, end in negations):
+                    return True
+    return False
+
+
+def safety_intervention_reply() -> "AgentReply":
+    """Return a warm, non-alarmist safety intervention response.
+
+    Offers immediate options without broadcasting to anyone automatically.
+    Hotline verified against https://sbhk.org.hk/?page_id=31214 and emergency
+    guidance against https://chatpoint.org.hk/pages/hotline on 2026-10-02.
+    """
+
+    return AgentReply(
+        text=(
+            "I'm sorry you are going through this. Are you in immediate danger?\n\n"
+            "If you may hurt yourself now, call 999 in Hong Kong or go to the nearest "
+            "emergency department. Outside Hong Kong, contact your local emergency service. "
+            "If possible, move away from anything you could use to hurt yourself and ask "
+            "someone you trust to stay with you.\n\n"
+            "The Samaritan Befrienders Hong Kong: 2389 2222 "
+            "(24-hour emotional support hotline, staffed by volunteers). "
+            "If you cannot get through and are in immediate danger, seek emergency help.\n\n"
+            "This chat is not an emergency service and cannot guarantee immediate or "
+            "continuous availability. I have not contacted anyone. You can choose an "
+            "authorized family contact and review a support message; it is sent only "
+            "after you explicitly confirm the recipient and message."
+        ),
+        proposed_task=None,
+        mode="safety_intervention",
+    )
+
+
 @dataclass(slots=True)
 class AgentReply:
     text: str

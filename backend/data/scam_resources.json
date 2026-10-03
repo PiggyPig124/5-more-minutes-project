@@ -1,0 +1,160 @@
+[
+  {
+    "id": "scam-phone-fraud",
+    "title": "電話詐騙防範指引",
+    "excerpt": "騙徒假冒政府官員、銀行職員或親友，以緊急理由要求轉帳或提供個人資料。常見手法包括假冒入境處、海關、警方或內地執法機關。",
+    "source_url": "https://www.police.gov.hk/ppp_tc/04_crime_matters/adcc/",
+    "verified_at": "2026-09-20",
+    "scam_type": "phone_fraud",
+    "warning_signs": [
+      "對方聲稱你是犯罪嫌疑人的身份",
+      "要求你立即轉帳到「安全帳戶」",
+      "要求你提供銀行密碼或一次性驗證碼",
+      "要求你不要告訴家人或朋友",
+      "通話中聽到背景有類似呼叫中心的聲音",
+      "對方自稱是內地執法機關但你在香港"
+    ],
+    "verification_steps": [
+      "記下對方的自稱姓名、機構名稱和回電號碼",
+      "掛線後致電警方反詐騙熱線 18222 核實",
+      "不要使用對方提供的號碼回電，應自行查閱官方號碼"
+    ],
+    "next_steps": [
+      "致電 18222 反詐騙熱線報告事件",
+      "如有損失，立即聯絡銀行凍結帳戶",
+      "通知信任的家人陪同處理"
+    ],
+    "official_contacts": [
+      "警方反詐騙熱線：18222",
+      "你的銀行客服熱線（查核帳戶安全）"
+    ],
+    "search_terms": ["電話詐騙", "來電詐騙", "假冒官員", "電話騙案", "phone scam"],
+    "source_authority": "香港警務處反詐騙協調中心",
+    "content_hash": ""
+  },
+  {
+    "id": "scam-online-shopping",
+    "title": "網上購物詐騙防範指引",
+    "excerpt": "騙徒在社交媒體或拍賣網站發布低價商品，收到付款後不發貨或發出假貨。常見於電子產品、演唱會門票和奢侈品。",
+    "source_url": "https://www.consumer.org.hk",
+    "verified_at": "2026-09-20",
+    "scam_type": "online_shopping",
+    "warning_signs": [
+      "價格遠低於市場價",
+      "賣家要求使用點對點轉帳而非第三方支付平台",
+      "賣家不願意提供實物照片或見面交收",
+      "社交媒體廣告沒有公司資料或退換政策"
+    ],
+    "verification_steps": [
+      "搜尋賣家名稱和產品名稱，查看是否有騙案報告",
+      "檢查賣家帳戶的成立時間和評價歷史",
+      "使用第三方支付平台（如PayPal），避免直接轉帳"
+    ],
+    "next_steps": [
+      "向消委會投訴（電話：2929 2222）",
+      "如涉及銀行轉帳，聯絡銀行嘗試追回款項",
+      "在社交平台上舉報該賣家帳號"
+    ],
+    "official_contacts": [
+      "消費者委員會：2929 2222",
+      "警方反詐騙熱線：18222"
+    ],
+    "search_terms": ["網購詐騙", "網上購物", "拍賣騙局", "online shopping scam"],
+    "source_authority": "消費者委員會",
+    "content_hash": ""
+  },
+  {
+    "id": "scam-romance",
+    "title": "交友/感情詐騙防範指引",
+    "excerpt": "騙徒在社交平台或交友軟件建立虛假身份，與受害人發展感情關係後，以各種理由要求金錢援助。常見於長者群體。",
+    "source_url": "https://www.police.gov.hk/ppp_tc/04_crime_matters/adcc/",
+    "verified_at": "2026-09-20",
+    "scam_type": "romance_scam",
+    "warning_signs": [
+      "對方很快表達強烈感情但拒絕見面",
+      "聲稱在海外工作或遇到緊急情況需要金錢",
+      "照片看起來太完美或不一致",
+      "要求你保密這段關係"
+    ],
+    "verification_steps": [
+      "用反向圖片搜尋檢查對方的照片",
+      "要求視像通話見面，觀察是否真實",
+      "不要匯錢給未曾親自見面的人"
+    ],
+    "next_steps": [
+      "停止與對方的一切金錢往來",
+      "致電 18222 報案",
+      "通知家人你遇到的情況"
+    ],
+    "official_contacts": [
+      "警方反詐騙熱線：18222",
+      "消費者委員會：2929 2222"
+    ],
+    "search_terms": ["感情詐騙", "交友騙局", "網戀騙案", "romance scam"],
+    "source_authority": "香港警務處反詐騙協調中心",
+    "content_hash": ""
+  },
+  {
+    "id": "scam-investment",
+    "title": "投資詐騙防範指引",
+    "excerpt": "騙徒自稱投資顧問，推介高回報低風險的投資機會，誘使受害人轉帳到假冒投資平台。長者尤其容易成為目標。",
+    "source_url": "https://www.hkma.gov.hk",
+    "verified_at": "2026-09-20",
+    "scam_type": "investment_fraud",
+    "warning_signs": [
+      "保證高回報同時聲稱低風險",
+      "要求轉帳到私人帳戶而非持牌金融機構",
+      "投資平台名稱與知名機構相似但有細微差異",
+      "要求在短時間內決定投資"
+    ],
+    "verification_steps": [
+      "在證監會投資者教育中心網站查核公司是否持牌",
+      "聯絡金管局查詢金融機構是否合法",
+      "諮詢信任的家人或專業人士"
+    ],
+    "next_steps": [
+      "停止一切轉帳和投資操作",
+      "致電金管局公眾查詢熱線 2878 8222",
+      "如已轉帳，立即聯絡銀行"
+    ],
+    "official_contacts": [
+      "金管局公眾查詢：2878 8222",
+      "證監會投資者教育中心：https://www.hkiec.hk",
+      "警方反詐騙熱線：18222"
+    ],
+    "search_terms": ["投資詐騙", "理財騙局", "高回報", "investment scam"],
+    "source_authority": "香港金融管理局",
+    "content_hash": ""
+  },
+  {
+    "id": "scam-family-impersonation",
+    "title": "冒認家人詐騙防範指引",
+    "excerpt": "騙徒冒認受害人的家人（尤其是子女），聲稱遇到緊急情況需要金錢，利用長者對子女的關心行騙。常見於WhatsApp或電話。",
+    "source_url": "https://www.police.gov.hk/ppp_tc/04_crime_matters/adcc/",
+    "verified_at": "2026-09-20",
+    "scam_type": "family_impersonation",
+    "warning_signs": [
+      "自稱是你子女但號碼不認識",
+      "聲稱被扣留或出事故需要立即匯錢",
+      "要求你保密不要告訴其他人",
+      "催促你盡快行動"
+    ],
+    "verification_steps": [
+      "掛線後用你手機裡存的子女號碼回電",
+      "向其他家人核實情況",
+      "詢問只有真正家人知道的問題"
+    ],
+    "next_steps": [
+      "用已知號碼聯絡子女核實",
+      "如確認是騙局，致電 18222 報案",
+      "通知家人提高警覺"
+    ],
+    "official_contacts": [
+      "警方反詐騙熱線：18222",
+      "你的子女（用已核實的號碼）"
+    ],
+    "search_terms": ["冒認家人", "冒充子女", "WhatsApp騙案", "family impersonation"],
+    "source_authority": "香港警務處反詐騙協調中心",
+    "content_hash": ""
+  }
+]

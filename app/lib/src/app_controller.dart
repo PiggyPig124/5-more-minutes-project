@@ -4,13 +4,19 @@ import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
 import 'models.dart';
+import 'reminders.dart';
 import 'storage.dart';
 
 class AppController extends ChangeNotifier {
-  AppController({required this.api, required this.sessionStore});
+  AppController({
+    required this.api,
+    required this.sessionStore,
+    this.reminderScheduler,
+  });
 
   final AnxinApi api;
   final SessionStore sessionStore;
+  final ReminderScheduler? reminderScheduler;
 
   AuthSession? session;
   bool initialized = false;
@@ -52,6 +58,13 @@ class AppController extends ChangeNotifier {
   String communityTopic = '';
   String communityArea = '';
   bool communityNoResults = false;
+  List<CatalogActivity> catalogActivities = const [];
+  List<CatalogActivity> catalogRecommendations = const [];
+  List<CatalogActivity> catalogInterests = const [];
+  List<ScamResource> scamResources = const [];
+  List<VerifyAction> verifyActions = const [];
+  List<ScamContact> scamContacts = const [];
+  List<ScamLogEntry> scamLogs = const [];
   final Map<String, String> drafts = {};
   final List<ActionProposal> pendingActions = [];
   final Set<String> sendingConversationIds = <String>{};
@@ -69,6 +82,7 @@ class AppController extends ChangeNotifier {
   int _sessionGeneration = 0;
   int _guestGeneration = 0;
   int _communityGeneration = 0;
+  int _catalogConsentGeneration = 0;
 
   bool get isSignedIn => session != null;
   AppUser? get user => session?.user;
@@ -238,9 +252,17 @@ class AppController extends ChangeNotifier {
 
   Future<void> logout() async {
     await endGuestSession();
+    final currentUserId = user?.id;
     _sessionGeneration += 1;
     loading = true;
     notifyListeners();
+    if (currentUserId != null) {
+      try {
+        await reminderScheduler?.cancelUserNotifications(currentUserId);
+      } on Object catch (error) {
+        errorMessage = _messageFor(error);
+      }
+    }
     try {
       await api.logout();
     } on ApiException catch (error) {
@@ -278,6 +300,13 @@ class AppController extends ChangeNotifier {
       guestHelpResources = const [];
       savingMemorySuggestionIds.clear();
       savedMemorySuggestionIds.clear();
+      catalogActivities = const [];
+      catalogRecommendations = const [];
+      catalogInterests = const [];
+      scamResources = const [];
+      verifyActions = const [];
+      scamContacts = const [];
+      scamLogs = const [];
       pendingActions.clear();
       drafts.clear();
       _draftClientIds.clear();
@@ -329,6 +358,11 @@ class AppController extends ChangeNotifier {
       tasks = foundation[0] as List<CareTask>;
       invitations = foundation[1] as List<FamilyInvitation>;
       links = foundation[2] as List<FamilyInvitation>;
+      try {
+        await reminderScheduler?.syncDueTasks(user!.id, tasks);
+      } on Object catch (error) {
+        errors.add(_messageFor(error));
+      }
       if (isElder && foundation.length > 3) {
         conversations = foundation[3] as List<Conversation>;
         await _restorePendingActions(conversations, generation);
@@ -490,7 +524,9 @@ class AppController extends ChangeNotifier {
         return false;
       }
       memoryConsentEnabled = updated;
+      _catalogConsentGeneration++;
       if (!memoryConsentEnabled) {
+        catalogRecommendations = const [];
         skillSuggestions = const [];
         opportunities = const [];
         opportunitySources = const [];
@@ -942,6 +978,11 @@ class AppController extends ChangeNotifier {
       await sessionStore.clearDraftClientId(conversationId, userId: user?.id);
       drafts.remove(conversationId);
       _draftClientIds.remove(conversationId);
+      try {
+        await reminderScheduler?.markConversationActivity(user!.id);
+      } on Object catch (error) {
+        errorMessage = _messageFor(error);
+      }
       notifyListeners();
       return true;
     } on ApiException catch (error) {
@@ -967,6 +1008,11 @@ class AppController extends ChangeNotifier {
         for (final item in tasks)
           if (item.id == updated.id) updated else item,
       ];
+      try {
+        await reminderScheduler?.syncDueTasks(user!.id, tasks);
+      } on Object catch (error) {
+        errorMessage = _messageFor(error);
+      }
       notifyListeners();
       return true;
     } on ApiException catch (error) {
@@ -999,6 +1045,11 @@ class AppController extends ChangeNotifier {
       _actionClientIds.remove(action.id);
       if (task != null && !tasks.any((item) => item.id == task.id)) {
         tasks = [task, ...tasks];
+        try {
+          await reminderScheduler?.syncDueTasks(user!.id, tasks);
+        } on Object catch (error) {
+          errorMessage = _messageFor(error);
+        }
       }
       notifyListeners();
       return true;
@@ -1541,6 +1592,237 @@ class AppController extends ChangeNotifier {
     } finally {
       _sendingFamilyMessageKeys.remove(operationKey);
       loading = false;
+      notifyListeners();
+    }
+  }
+
+  // --- Community discovery (FR CMT 01-05) ---
+
+  Future<void> refreshCatalogActivities({bool silent = false}) async {
+    if (api is! CatalogScamApi || session == null) return;
+    final generation = _sessionGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await (api as CatalogScamApi).listCatalogActivities();
+      if (generation != _sessionGeneration || session == null) return;
+      catalogActivities = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> refreshCatalogRecommendations({bool silent = false}) async {
+    if (api is! CatalogScamApi || !isElder) return;
+    final generation = _sessionGeneration;
+    final consentGeneration = _catalogConsentGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await (api as CatalogScamApi).catalogRecommendations();
+      if (generation != _sessionGeneration ||
+          session == null ||
+          consentGeneration != _catalogConsentGeneration) {
+        return;
+      }
+      catalogRecommendations = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<bool> expressInterest(CatalogActivity activity) async {
+    if (api is! CatalogScamApi || !isElder) return false;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await (api as CatalogScamApi).expressCommunityInterest(activity.id);
+      if (generation != _sessionGeneration || session == null) return false;
+      await refreshCatalogInterests(silent: true);
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return false;
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> withdrawInterest(CatalogActivity activity) async {
+    if (api is! CatalogScamApi || !isElder) return false;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await (api as CatalogScamApi).withdrawCommunityInterest(activity.id);
+      if (generation != _sessionGeneration || session == null) return false;
+      await refreshCatalogInterests(silent: true);
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return false;
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> refreshCatalogInterests({bool silent = false}) async {
+    if (api is! CatalogScamApi || !isElder) return;
+    final generation = _sessionGeneration;
+    try {
+      final loaded = await (api as CatalogScamApi).listCommunityInterests();
+      if (generation != _sessionGeneration || session == null) return;
+      catalogInterests = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      if (!silent) errorMessage = error.message;
+      notifyListeners();
+    }
+  }
+
+  // --- Scam safety (FR SCM 01-04) ---
+
+  Future<void> refreshScamResources({bool silent = false}) async {
+    if (api is! CatalogScamApi || session == null) return;
+    final generation = _sessionGeneration;
+    if (!silent) {
+      loading = true;
+      errorMessage = null;
+      notifyListeners();
+    }
+    try {
+      final loaded = await (api as CatalogScamApi).listScamResources();
+      if (generation != _sessionGeneration || session == null) return;
+      scamResources = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      errorMessage = error.message;
+      notifyListeners();
+    } finally {
+      if (!silent) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<List<ScamResource>> searchScamResources(String query) async {
+    if (api is! CatalogScamApi || session == null || query.trim().isEmpty) {
+      return const [];
+    }
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final results =
+          await (api as CatalogScamApi).searchScamResources(query.trim());
+      if (generation != _sessionGeneration || session == null) return const [];
+      return results;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return const [];
+      errorMessage = error.message;
+      notifyListeners();
+      return const [];
+    }
+  }
+
+  Future<void> refreshVerifyActions({bool silent = true}) async {
+    if (api is! CatalogScamApi || session == null) return;
+    final generation = _sessionGeneration;
+    try {
+      final loaded = await (api as CatalogScamApi).getVerifyActions();
+      if (generation != _sessionGeneration || session == null) return;
+      verifyActions = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      if (!silent) errorMessage = error.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshScamContacts({bool silent = true}) async {
+    if (api is! CatalogScamApi || session == null) return;
+    final generation = _sessionGeneration;
+    try {
+      final loaded = await (api as CatalogScamApi).getScamContacts();
+      if (generation != _sessionGeneration || session == null) return;
+      scamContacts = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      if (!silent) errorMessage = error.message;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> logScamGuidance({
+    required String scamType,
+    required String guidanceSummary,
+    String? scamResourceId,
+    String? conversationId,
+  }) async {
+    if (api is! CatalogScamApi || !isElder) return false;
+    final generation = _sessionGeneration;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await (api as CatalogScamApi).logScamGuidance(
+        scamType: scamType,
+        guidanceSummary: guidanceSummary,
+        scamResourceId: scamResourceId,
+        conversationId: conversationId,
+      );
+      if (generation != _sessionGeneration || session == null) return false;
+      await refreshScamLogs(silent: true);
+      notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return false;
+      errorMessage = error.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> refreshScamLogs({bool silent = true}) async {
+    if (api is! CatalogScamApi || !isElder) return;
+    final generation = _sessionGeneration;
+    try {
+      final loaded = await (api as CatalogScamApi).listScamLogs();
+      if (generation != _sessionGeneration || session == null) return;
+      scamLogs = loaded;
+      notifyListeners();
+    } on ApiException catch (error) {
+      if (generation != _sessionGeneration || session == null) return;
+      if (!silent) errorMessage = error.message;
       notifyListeners();
     }
   }

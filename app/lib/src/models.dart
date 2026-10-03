@@ -247,9 +247,9 @@ class MemorySuggestion {
         sourceMessageId: _string(json, const ['source_message_id']),
         topicKey: _string(json, const ['topic_key', 'topicKey']),
         sensitivity: _string(json, const ['sensitivity']) ?? 'ordinary',
-        requiresConfirmation:
-            _bool(json, const ['requires_confirmation', 'requiresConfirmation']) ??
-                true,
+        requiresConfirmation: _bool(json,
+                const ['requires_confirmation', 'requiresConfirmation']) ??
+            true,
       );
 }
 
@@ -1017,6 +1017,207 @@ class SendMessageResult {
   final bool? demoMode;
 }
 
+/// A verified community activity for the Community Discovery feature.
+class CatalogActivity {
+  const CatalogActivity({
+    required this.id,
+    required this.title,
+    required this.description,
+    this.organizer,
+    this.district,
+    this.address,
+    this.url,
+    this.startDate,
+    this.endDate,
+    this.scheduleNote,
+    this.mobilityNote,
+    this.interestTags = const [],
+    this.skillTags = const [],
+    this.contributionType,
+    this.verified = false,
+    this.verifiedAt,
+    this.interestStatus,
+  });
+
+  final String id;
+  final String title;
+  final String description;
+  final String? organizer;
+  final String? district;
+  final String? address;
+  final String? url;
+  final DateTime? startDate;
+  final DateTime? endDate;
+  final String? scheduleNote;
+  final String? mobilityNote;
+  final List<String> interestTags;
+  final List<String> skillTags;
+  final String? contributionType;
+  final bool verified;
+  final DateTime? verifiedAt;
+  final String? interestStatus;
+
+  factory CatalogActivity.fromJson(Map<String, dynamic> json) {
+    return CatalogActivity(
+      id: _string(json, const ['id', 'activity_id']) ?? '',
+      title: _string(json, const ['title', 'name']) ?? '',
+      description: _string(json, const ['description', 'content']) ?? '',
+      organizer: _string(json, const ['organizer']),
+      district: _string(json, const ['district']),
+      address: _string(json, const ['address']),
+      url: _string(json, const ['url', 'link']),
+      startDate: _date(json, const ['start_date', 'startDate']),
+      endDate: _date(json, const ['end_date', 'endDate']),
+      scheduleNote: _string(json, const ['schedule_note', 'scheduleNote']),
+      mobilityNote: _string(json, const ['mobility_note', 'mobilityNote']),
+      interestTags:
+          _stringList(json['interest_tags'] ?? json['interestTags']) ??
+              const [],
+      skillTags:
+          _stringList(json['skill_tags'] ?? json['skillTags']) ?? const [],
+      contributionType:
+          _string(json, const ['contribution_type', 'contributionType']),
+      verified: _bool(json, const ['verified', 'is_verified']) ?? false,
+      verifiedAt: _date(json, const ['verified_at', 'verifiedAt']),
+      interestStatus:
+          _string(json, const ['interest_status', 'interestStatus']),
+    );
+  }
+}
+
+/// A verified anti-scam guidance resource.
+class ScamResource {
+  const ScamResource({
+    required this.id,
+    required this.title,
+    required this.excerpt,
+    this.sourceUrl,
+    this.verifiedAt,
+    this.scamType,
+    this.warningSigns = const [],
+    this.verificationSteps = const [],
+    this.nextSteps = const [],
+    this.officialContacts = const [],
+    this.sourceAuthority,
+  });
+
+  final String id;
+  final String title;
+  final String excerpt;
+  final String? sourceUrl;
+  final DateTime? verifiedAt;
+  final String? scamType;
+  final List<String> warningSigns;
+  final List<String> verificationSteps;
+  final List<String> nextSteps;
+  final List<String> officialContacts;
+  final String? sourceAuthority;
+
+  factory ScamResource.fromJson(Map<String, dynamic> json) {
+    return ScamResource(
+      id: _string(json, const ['id', 'resource_id']) ?? '',
+      title: _string(json, const ['title', 'name']) ?? '',
+      excerpt: _string(json, const ['excerpt', 'summary', 'content']) ?? '',
+      sourceUrl: _string(json, const ['source_url', 'sourceUrl', 'url']),
+      verifiedAt: _date(json, const ['verified_at', 'verifiedAt']),
+      scamType: _string(json, const ['scam_type', 'scamType']),
+      warningSigns:
+          _stringList(json['warning_signs'] ?? json['warningSigns']) ??
+              const [],
+      verificationSteps: _stringList(
+              json['verification_steps'] ?? json['verificationSteps']) ??
+          const [],
+      nextSteps:
+          _stringList(json['next_steps'] ?? json['nextSteps']) ?? const [],
+      officialContacts:
+          _stringList(json['official_contacts'] ?? json['officialContacts']) ??
+              const [],
+      sourceAuthority:
+          _string(json, const ['source_authority', 'sourceAuthority']),
+    );
+  }
+}
+
+/// A verified anti-scam contact (police, consumer council, etc.).
+class ScamContact {
+  const ScamContact({
+    required this.name,
+    required this.phone,
+    this.url,
+    this.description,
+  });
+
+  final String name;
+  final String phone;
+  final String? url;
+  final String? description;
+
+  factory ScamContact.fromJson(Map<String, dynamic> json) {
+    return ScamContact(
+      name: _string(json, const ['name', 'name_en']) ?? '',
+      phone: _string(json, const ['phone', 'tel']) ?? '',
+      url: _string(json, const ['url', 'link']),
+      description: _string(json, const ['description', 'description_en']),
+    );
+  }
+}
+
+/// The standard three-step scam verification protocol action.
+class VerifyAction {
+  const VerifyAction({
+    required this.step,
+    required this.action,
+    required this.title,
+    required this.description,
+    this.icon,
+  });
+
+  final int step;
+  final String action;
+  final String title;
+  final String description;
+  final String? icon;
+
+  factory VerifyAction.fromJson(Map<String, dynamic> json) {
+    return VerifyAction(
+      step: (json['step'] as num?)?.toInt() ?? 0,
+      action: _string(json, const ['action']) ?? '',
+      title: _string(json, const ['title', 'title_en']) ?? '',
+      description: _string(json, const ['description', 'description_en']) ?? '',
+      icon: _string(json, const ['icon']),
+    );
+  }
+}
+
+/// A record of scam-safety guidance provided in a conversation.
+class ScamLogEntry {
+  const ScamLogEntry({
+    required this.id,
+    required this.scamType,
+    required this.guidanceSummary,
+    this.familyNotified = false,
+    this.createdAt,
+  });
+
+  final String id;
+  final String scamType;
+  final String guidanceSummary;
+  final bool familyNotified;
+  final DateTime? createdAt;
+
+  factory ScamLogEntry.fromJson(Map<String, dynamic> json) {
+    return ScamLogEntry(
+      id: _string(json, const ['id', 'log_id']) ?? '',
+      scamType: _string(json, const ['scam_type', 'scamType']) ?? 'general',
+      guidanceSummary:
+          _string(json, const ['guidance_summary', 'guidanceSummary']) ?? '',
+      familyNotified:
+          _bool(json, const ['family_notified', 'familyNotified']) ?? false,
+      createdAt: _date(json, const ['created_at', 'createdAt']),
+    );
+  }
+}
+
 String _stableId(Map<String, dynamic> json) {
   final value = jsonEncode(json);
   return value.hashCode.toRadixString(16);
@@ -1112,6 +1313,13 @@ List<Map<String, dynamic>> mapsFromJson(Object? value) {
     'family_messages',
     'familyMessages',
     'actions',
+    'activities',
+    'recommendations',
+    'interests',
+    'resources',
+    'logs',
+    'notifications',
+    'contacts',
   ]) {
     final nested = map[key];
     if (nested is List) {

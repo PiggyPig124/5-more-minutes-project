@@ -7,7 +7,7 @@ The new first phase adds guest conversation and public guidance without an accou
 For a Chinese overview of the updated requirements, completed work, verification evidence, and remaining scope, see [Echo requirements and progress](docs/ECHO_REQUIREMENTS_AND_PROGRESS_ZH.md).
 The [feasibility review](docs/ECHO_DEFERRED_FEATURES_FEASIBILITY_ZH.md) identifies a source-terms issue in the volunteer-page adapter. It remains disabled in the default application; technical retrieval is not permission to reuse provider content.
 
-Cantonese voice, scheduled notifications, and crisis escalation belong to later stages. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo.
+The Hamza integration adds editable Cantonese voice drafts, opt-in Android local reminders, server check-in schedules and an in-app care inbox, designated safety contacts, urgent-risk intervention, anti-scam guidance, and activity interests. Human group chat is also included. Personal retrieval supports a configurable embedding service; without credentials it is explicitly labelled keyword retrieval. The default conversational adapter is still a deterministic demo. See the [integration record and verification](docs/HAMZA_INTEGRATION_ZH.md) for feature entry points, compatibility decisions, and platform limits.
 
 For usage and demonstration steps, see the [English user guide](docs/USER_GUIDE_EN.md). A [Chinese guide](docs/USER_GUIDE_ZH.md) is also available.
 
