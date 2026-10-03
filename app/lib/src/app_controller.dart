@@ -329,7 +329,9 @@ class AppController extends ChangeNotifier {
     final errors = <String>[];
     if (isElder && api is ConsentApi) {
       try {
-        memoryConsentEnabled = await (api as ConsentApi).getMemoryConsent();
+        final enabled = await (api as ConsentApi).getMemoryConsent();
+        if (generation != _sessionGeneration || session == null) return;
+        memoryConsentEnabled = enabled;
       } on ApiException catch (error) {
         errors.add(error.message);
       }
@@ -363,6 +365,7 @@ class AppController extends ChangeNotifier {
       } on Object catch (error) {
         errors.add(_messageFor(error));
       }
+      if (generation != _sessionGeneration || session == null) return;
       if (isElder && foundation.length > 3) {
         conversations = foundation[3] as List<Conversation>;
         await _restorePendingActions(conversations, generation);
@@ -400,17 +403,20 @@ class AppController extends ChangeNotifier {
       // grant exists, avoiding noisy 403s for ordinary care-task links.
       if (_canUseFamilyMessages) {
         try {
-          familyMessages = await api.listFamilyMessages();
+          final messages = await api.listFamilyMessages();
+          if (generation != _sessionGeneration || session == null) return;
+          familyMessages = messages;
         } on Object catch (error) {
           errors.add(_messageFor(error));
         }
       } else {
         familyMessages = const [];
       }
+      if (generation != _sessionGeneration || session == null) return;
       if (errors.isNotEmpty) errorMessage = errors.first;
       notifyListeners();
     } finally {
-      if (!silent) {
+      if (!silent && generation == _sessionGeneration) {
         loading = false;
         notifyListeners();
       }

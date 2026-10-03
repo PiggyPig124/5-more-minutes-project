@@ -1,13 +1,107 @@
 import 'package:anxin_companion/src/app_controller.dart';
 import 'package:anxin_companion/src/api_client.dart';
 import 'package:anxin_companion/src/models.dart';
+import 'package:anxin_companion/src/reminders.dart';
 import 'package:anxin_companion/src/storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'dart:async';
 
 import 'helpers.dart';
 
 void main() {
+  test('old refresh cannot restore conversations after reminder sync', () async {
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+    final api = _GenerationApi();
+    final scheduler = _BlockingReminderScheduler();
+    final controller = AppController(
+      api: api,
+      sessionStore: SessionStore(MemoryLocalStore()),
+      reminderScheduler: scheduler,
+    );
+    expect(await controller.login(email: 'first@example.com', password: 'pw'),
+        isTrue);
+
+    api.fakeConversations.add(const Conversation(
+      id: 'old-conversation', title: 'Previous account private chat'));
+    scheduler.blockNextSync = true;
+    final staleRefresh = controller.refreshHome();
+    await scheduler.syncStarted.future;
+    await controller.logout();
+    api.fakeConversations.clear();
+    expect(await controller.login(email: 'second@example.com', password: 'pw'),
+        isTrue);
+
+    api.blockNextTaskLoad = true;
+    final currentRefresh = controller.refreshHome();
+    await Future<void>.delayed(Duration.zero);
+    scheduler.releaseSync();
+    await staleRefresh;
+    expect(controller.conversations, isEmpty);
+    expect(controller.loading, isTrue);
+    api.releaseBlockedTaskLoad();
+    await currentRefresh;
+    expect(controller.loading, isFalse);
+  });
+
+  test('late family messages cannot reappear after account switch', () async {
+    final api = _DelayedFamilyListApi()
+      ..fakeLinks.add(const FamilyInvitation(
+        id: 'link-1',
+        email: 'caregiver@example.com',
+        status: InvitationStatus.accepted,
+        scopes: ['family_messages'],
+        elderId: 'elder-1',
+        caregiverId: 'caregiver-1',
+      ));
+    final controller =
+        AppController(api: api, sessionStore: SessionStore(MemoryLocalStore()));
+    expect(await controller.login(email: 'elder@example.com', password: 'pw'),
+        isTrue);
+
+    api.blockNextFamilyList = true;
+    final staleRefresh = controller.refreshHome();
+    await api.familyListStarted.future;
+    await controller.logout();
+    api.fakeLinks.clear();
+    api.role = UserRole.caregiver;
+    expect(await controller.login(email: 'caregiver@example.com', password: 'pw'),
+        isTrue);
+
+    api.releaseFamilyList([
+      const FamilyMessage(
+        id: 'old-message',
+        senderId: 'elder-1',
+        recipientId: 'caregiver-1',
+        content: 'Private message from previous account',
+      ),
+    ]);
+    await staleRefresh;
+    expect(controller.familyMessages, isEmpty);
+  });
+
+  test('late memory consent cannot overwrite a new account', () async {
+    final api = _DelayedConsentApi();
+    final controller =
+        AppController(api: api, sessionStore: SessionStore(MemoryLocalStore()));
+    expect(await controller.login(email: 'elder@example.com', password: 'pw'),
+        isTrue);
+
+    api.blockNextConsentRead = true;
+    final staleRefresh = controller.refreshHome();
+    await api.consentReadStarted.future;
+    await controller.logout();
+    api.role = UserRole.caregiver;
+    expect(await controller.login(email: 'caregiver@example.com', password: 'pw'),
+        isTrue);
+
+    api.releaseConsentRead(true);
+    await staleRefresh;
+    expect(controller.memoryConsentEnabled, isFalse);
+  });
+
   test('a slower community search cannot replace the newer filter result',
       () async {
     final api = _CommunitySearchApi();
@@ -432,6 +526,71 @@ class _GenerationApi extends FakeApi {
     _blockedTasks?.complete(const <CareTask>[]);
     _blockedTasks = null;
   }
+}
+
+class _BlockingReminderScheduler extends ReminderScheduler {
+  bool blockNextSync = false;
+  final Completer<void> syncStarted = Completer<void>();
+  Completer<void>? _blockedSync;
+
+  @override
+  Future<void> syncDueTasks(String userId, List<CareTask> tasks) {
+    if (blockNextSync) {
+      blockNextSync = false;
+      _blockedSync = Completer<void>();
+      syncStarted.complete();
+      return _blockedSync!.future;
+    }
+    return Future<void>.value();
+  }
+
+  @override
+  Future<void> cancelUserNotifications(String userId) async {}
+
+  void releaseSync() => _blockedSync!.complete();
+}
+
+class _DelayedFamilyListApi extends FakeApi {
+  bool blockNextFamilyList = false;
+  final Completer<void> familyListStarted = Completer<void>();
+  Completer<List<FamilyMessage>>? _blockedFamilyMessages;
+
+  @override
+  Future<List<FamilyMessage>> listFamilyMessages() {
+    if (blockNextFamilyList) {
+      blockNextFamilyList = false;
+      _blockedFamilyMessages = Completer<List<FamilyMessage>>();
+      familyListStarted.complete();
+      return _blockedFamilyMessages!.future;
+    }
+    return super.listFamilyMessages();
+  }
+
+  void releaseFamilyList(List<FamilyMessage> messages) {
+    _blockedFamilyMessages!.complete(messages);
+  }
+}
+
+class _DelayedConsentApi extends FakeApi implements ConsentApi {
+  bool blockNextConsentRead = false;
+  final Completer<void> consentReadStarted = Completer<void>();
+  Completer<bool>? _blockedConsent;
+
+  @override
+  Future<bool> getMemoryConsent() {
+    if (blockNextConsentRead) {
+      blockNextConsentRead = false;
+      _blockedConsent = Completer<bool>();
+      consentReadStarted.complete();
+      return _blockedConsent!.future;
+    }
+    return Future<bool>.value(false);
+  }
+
+  @override
+  Future<bool> setMemoryConsent(bool enabled) async => enabled;
+
+  void releaseConsentRead(bool enabled) => _blockedConsent!.complete(enabled);
 }
 
 class _DelayedFamilyStore extends MemoryLocalStore {
