@@ -8,6 +8,7 @@ import 'models.dart';
 import 'storage.dart';
 import 'localization.dart';
 import 'settings_screen.dart';
+import 'group_chat.dart';
 
 final apiProvider = Provider<AnxinApi>((ref) => RestApiClient());
 final localStoreProvider = Provider<LocalStore>((ref) => SecureLocalStore());
@@ -1356,6 +1357,24 @@ class ElderHome extends ConsumerWidget {
                   builder: (_) => const FamilyMessagesScreen()),
             ),
           ),
+          if (controller.api is HumanGroupApi) ...[
+            const SizedBox(height: 10),
+            FeatureCard(
+              icon: Icons.groups_outlined,
+              title: tr(context, '人與人群聊', 'Human group chats'),
+              description: tr(context, '查看邀請及與社區成員聊天；AI 不參與。',
+                  'Accept invitations and chat with community members. No AI participates.'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
+                  body: GroupLobbyScreen(
+                    api: controller.api as HumanGroupApi,
+                    accountId: controller.user!.id,
+                  ),
+                ),
+              )),
+            ),
+          ],
           if (controller.errorMessage != null) ...[
             const SizedBox(height: 18),
             ErrorBanner(
@@ -1446,6 +1465,24 @@ class CaregiverHome extends ConsumerWidget {
                   builder: (_) => const FamilyMessagesScreen()),
             ),
           ),
+          if (controller.api is HumanGroupApi) ...[
+            const SizedBox(height: 10),
+            FeatureCard(
+              icon: Icons.groups_outlined,
+              title: tr(context, '人與人群聊', 'Human group chats'),
+              description: tr(context, '查看社區群聊邀請；AI 不參與。',
+                  'See community group invitations. No AI participates.'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
+                  body: GroupLobbyScreen(
+                    api: controller.api as HumanGroupApi,
+                    accountId: controller.user!.id,
+                  ),
+                ),
+              )),
+            ),
+          ],
           if (controller.errorMessage != null) ...[
             const SizedBox(height: 18),
             ErrorBanner(
@@ -1479,13 +1516,24 @@ class ElderChatScreen extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
           child: Row(
             children: [
-              Expanded(
-                  child: Text(tr(context, '我的對話', 'My chats'),
-                      style: Theme.of(context).textTheme.headlineSmall)),
-              FilledButton.icon(
-                  onPressed: () => _newConversation(context, ref),
-                  icon: const Icon(Icons.add_comment_rounded),
-                  label: Text(tr(context, '新對話', 'New chat'))),
+              Expanded(child: Text(tr(context, '我的對話', 'My chats'), style: Theme.of(context).textTheme.headlineSmall)),
+              if (controller.api is HumanGroupApi) ...[
+                IconButton(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
+                      body: GroupLobbyScreen(
+                        api: controller.api as HumanGroupApi,
+                        accountId: controller.user!.id,
+                      ),
+                    ),
+                  )),
+                  icon: const Icon(Icons.groups_outlined),
+                  tooltip: tr(context, '人與人群聊', 'Human group chats'),
+                ),
+                const SizedBox(width: 8),
+              ],
+              FilledButton.icon(onPressed: () => _newConversation(context, ref), icon: const Icon(Icons.add_comment_rounded), label: Text(tr(context, '新對話', 'New chat'))),
             ],
           ),
         ),
