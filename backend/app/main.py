@@ -14,8 +14,9 @@ from .db import initialize_database, make_engine, make_session_factory
 from .group_realtime import GroupRealtimeHub
 from .orchestrator import ConversationOrchestrator
 from .routers import actions, auth, community, conversations, family, guest, tasks
-from .routers import family_messages, groups
+from .routers import family_messages, groups, family_requests, family_blocks
 from .routers import memories, stories, resources
+from .routers import answer_cards
 from .resource_service import seed_resources
 from .routers import safety, check_ins, speech, scam, activity_catalog
 from .seed_extras import seed_community_activities, seed_scam_resources
@@ -103,9 +104,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(answer_cards.router)
     app.include_router(auth.router)
     app.include_router(guest.router)
     app.include_router(community.router)
+    app.include_router(family_blocks.router)
+    app.include_router(family_requests.router)
     app.include_router(family.router)
     app.include_router(family_messages.router)
     app.include_router(groups.router)

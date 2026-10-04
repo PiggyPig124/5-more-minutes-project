@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
 from ..dependencies import get_current_account, require_elder
@@ -26,6 +27,7 @@ from ..safety_models import CheckInSchedule
 from ..care_models import CarePreference
 from ..care_service import preferences, quiet_or_paused, aware, add_notification
 from ..memory_consent import memory_consent_enabled
+from ..memory_service import lock_owner_account, memory_revision
 from ..schemas import (
     CheckInScheduleCreate,
     CheckInScheduleOut,
@@ -101,6 +103,28 @@ def upsert_schedule(
     return _schedule_out(schedule, db)
 
 
+def _check_in_conversation(db: Session, owner_id: str, conversation_id: str | None) -> Conversation:
+    # Find or create the check-in conversation.
+    if conversation_id:
+        conversation = db.get(Conversation, conversation_id)
+        if conversation is None or conversation.owner_id != owner_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    else:
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.owner_id == owner_id,
+                Conversation.title == "定時關心",
+            )
+        )
+        if conversation is None:
+            conversation = Conversation(owner_id=owner_id, title="定時關心")
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+
+    return conversation
+
+
 async def generate_check_in(
     payload: CheckInTriggerRequest,
     request: Request,
@@ -114,6 +138,8 @@ async def generate_check_in(
     assistant message is persisted as a normal conversation turn.
     """
 
+    # Snapshot before reading any persisted context, including when Memory is off.
+    revision = memory_revision(db, account.id)
     schedule = db.scalar(select(CheckInSchedule).where(CheckInSchedule.elder_id == account.id))
     now = datetime.now(timezone.utc)
     local = now.astimezone(HK)
@@ -134,23 +160,8 @@ async def generate_check_in(
     if any(not (item.metadata_json or {}).get("check_in_trigger") for item in today_messages):
         return CheckInTriggerOut(triggered=False)
 
-    # Find or create the check-in conversation.
-    if payload.conversation_id:
-        conversation = db.get(Conversation, payload.conversation_id)
-        if conversation is None or conversation.owner_id != account.id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-    else:
-        conversation = db.scalar(
-            select(Conversation).where(
-                Conversation.owner_id == account.id,
-                Conversation.title == "定時關心",
-            )
-        )
-        if conversation is None:
-            conversation = Conversation(owner_id=account.id, title="定時關心")
-            db.add(conversation)
-            db.commit()
-            db.refresh(conversation)
+    # First-time creation also commits and can wait for SQLite's writer.
+    conversation = await run_in_threadpool(_check_in_conversation, db, account.id, payload.conversation_id)
 
     context: dict = {
         "rolling_summary": conversation.rolling_summary or "",
@@ -160,8 +171,6 @@ async def generate_check_in(
 
     context["memory_retrieval_mode"] = "disabled"
     context["memory_sources"] = []
-    from ..memory_service import memory_revision
-    revision = memory_revision(db, account.id)
     if memory_consent_enabled(db, account.id):
         from ..memory_service import retrieve_for_chat
         from fastapi.encoders import jsonable_encoder
@@ -172,28 +181,24 @@ async def generate_check_in(
     db.rollback()
     reply = await request.app.state.orchestrator.run(context, CHECK_IN_TRIGGER_MESSAGE)
 
-    db.rollback()
-    if context["memory_sources"] and (not memory_consent_enabled(db, account.id)
-            or memory_revision(db, account.id) != revision):
-        context = {"check_in_trigger": True, "memory_sources": [], "memory_retrieval_mode": "disabled"}
-        db.rollback()
-        reply = await request.app.state.orchestrator.run(context, CHECK_IN_TRIGGER_MESSAGE)
-
     if reply.mode == "error":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": reply.text, "mode": "error"},
         )
 
-    from ..memory_service import lock_owner_account
-    lock_owner_account(db, account.id)
+    await run_in_threadpool(lock_owner_account, db, account.id)
     db.expire_all()
+    if memory_revision(db, account.id) != revision:
+        db.rollback()
+        raise HTTPException(409, "記憶資料已更新，請重試以使用最新內容。")
+    if context["memory_sources"] and not memory_consent_enabled(db, account.id):
+        db.rollback()
+        raise HTTPException(409, "記憶授權已關閉，請重試。")
     current_settings = preferences(db, account.id)
     db.refresh(schedule)
     if (not schedule.enabled or quiet_or_paused(current_settings, datetime.now(timezone.utc))
-            or current_settings.skip_date == local.date().isoformat()
-            or (context["memory_sources"] and (not memory_consent_enabled(db, account.id)
-                or memory_revision(db, account.id) != revision))):
+            or current_settings.skip_date == local.date().isoformat()):
         db.rollback()
         return CheckInTriggerOut(triggered=False)
     from sqlalchemy import func

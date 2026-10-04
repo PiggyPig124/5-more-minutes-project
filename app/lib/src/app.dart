@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -5,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'api_client.dart';
 import 'app_controller.dart';
 import 'models.dart';
+import 'memory_controls_panel.dart';
 import 'care_controls_screen.dart';
 import 'reminders.dart';
 import 'reminder_settings_screen.dart';
@@ -14,6 +16,15 @@ import 'storage.dart';
 import 'localization.dart';
 import 'settings_screen.dart';
 import 'group_chat.dart';
+import 'task_sharing_screen.dart';
+import 'task_access_refresh.dart';
+import 'task_details_screen.dart';
+import 'family_connections_screen.dart';
+import 'answer_card_controller.dart';
+import 'answer_card_screen.dart';
+import 'answer_card_editor.dart';
+import 'answer_card_sharing_controller.dart';
+import 'answer_card_sharing_screen.dart';
 
 final apiProvider = Provider<AnxinApi>((ref) => RestApiClient());
 final localStoreProvider = Provider<LocalStore>((ref) => SecureLocalStore());
@@ -27,6 +38,95 @@ final appControllerProvider = ChangeNotifierProvider<AppController>(
     reminderScheduler: ref.watch(reminderSchedulerProvider),
   ),
 );
+
+// Card RAM follows the identity of the active authentication/guest session.
+// Ordinary chat notifications preserve an unchanged draft.
+final answerCardControllerProvider = ChangeNotifierProvider<AnswerCardController>((ref) {
+  final source = ref.watch(appControllerProvider.notifier);
+  final cards = AnswerCardController(
+      api: source.api is AnswerCardApi ? source.api as AnswerCardApi : null);
+  void syncSession() => cards.bindSession(
+      ownerId: source.session?.user.id,
+      sessionIdentity: source.session,
+      guestIdentity: source.guestSession?.id);
+  syncSession();
+  source.addListener(syncSession);
+  ref.onDispose(() => source.removeListener(syncSession));
+  return cards;
+});
+
+final answerCardSharingControllerProvider = ChangeNotifierProvider<AnswerCardSharingController>((ref) {
+  final source = ref.watch(appControllerProvider.notifier);
+  final cards = ref.watch(answerCardControllerProvider.notifier);
+  final sharing = AnswerCardSharingController(
+    api: source.api is AnswerCardSharingApi ? source.api as AnswerCardSharingApi : null);
+  void sync() {
+    sharing.bindSession(ownerId: source.session?.user.id,
+      sessionIdentity: source.session, role: source.session?.user.role);
+    sharing.bindFamilyAuthorization(generation: source.familyConnectionGeneration,
+      links: source.links, accessUncertain: source.familyAuthorizationUncertain);
+  }
+  void syncCard() {
+    final p = sharing.preview;
+    if (p == null) return;
+    final card = cards.cards.where((x) => x.id == p.cardId).firstOrNull;
+    if (cards.busy || cards.draft?.owned?.id == p.cardId || card == null ||
+        card.version != p.cardVersion || card.publicPayloadHash != p.publicPayloadHash) {
+      sharing.invalidateCard(p.cardId);
+    }
+  }
+  sync(); source.addListener(sync); cards.addListener(syncCard);
+  ref.onDispose(() { source.removeListener(sync); cards.removeListener(syncCard); });
+  return sharing;
+});
+
+void _openAnswerCards(BuildContext context, WidgetRef ref) {
+  final cards = ref.read(answerCardControllerProvider);
+  Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AnswerCardsScreen(controller: cards,
+        exportApi: ref.read(appControllerProvider).api is AnswerCardExportApi
+            ? ref.read(appControllerProvider).api as AnswerCardExportApi : null,
+        openInbox: ref.read(appControllerProvider).isSignedIn && ref.read(appControllerProvider).api is AnswerCardSharingApi ? () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => AnswerCardSharingScreen(
+            controller: ref.read(answerCardSharingControllerProvider), inbox: true))) : null,
+        openSent: ref.read(appControllerProvider).isElder && ref.read(appControllerProvider).api is AnswerCardSharingApi ? () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => AnswerCardSharingScreen(
+            controller: ref.read(answerCardSharingControllerProvider)))) : null,
+        onShare: ref.read(appControllerProvider).isElder && ref.read(appControllerProvider).api is AnswerCardSharingApi ? (shareContext, card) {
+          final source = ref.read(appControllerProvider);
+          Navigator.of(shareContext).push(MaterialPageRoute<void>(builder: (_) =>
+            AnswerCardRecipientScreen(controller: ref.read(answerCardSharingControllerProvider),
+              card: card, recipients: source.familyMessageLinks)));
+        } : null)));
+}
+
+void _openAnswerCardDraft(BuildContext context, WidgetRef ref, ChatMessage message) {
+  if (message.isFromUser || message.pending || message.body.trim().isEmpty) return;
+  final source = ref.read(appControllerProvider);
+  final cards = ref.read(answerCardControllerProvider);
+  if (cards.busy) return;
+  if (source.session != null && message.conversationId != 'guest') {
+    unawaited(cards.prepareFromMessage(message.id));
+  } else if (source.session == null && source.guestSession != null) {
+    cards.prepareGuestAnswer(message.body);
+  } else {
+    return;
+  }
+  // Open immediately: Back can retire a still-running prepare operation.
+  Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AnswerCardEditorScreen(controller: cards)));
+}
+
+class _AnswerCardsFeature extends ConsumerWidget {
+  const _AnswerCardsFeature();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => FeatureCard(
+      icon: Icons.description_outlined,
+      title: tr(context, '答案卡', 'Answer cards'),
+      description: tr(context, '查看公共指引，或管理你明確保存的單張答案。',
+          'View public guidance and manage answers you explicitly save.'),
+      onTap: () => _openAnswerCards(context, ref));
+}
 
 final voiceInputProvider = ChangeNotifierProvider<VoiceInputController>(
   (ref) => VoiceInputController(),
@@ -463,6 +563,10 @@ class _GuestShellState extends ConsumerState<GuestShell> {
                             label: Text(tr(context, '開始對話', 'Start chatting'))),
                       ]))),
           const SizedBox(height: 12),
+          if (controller.api is AnswerCardApi) ...[
+            const _AnswerCardsFeature(),
+            const SizedBox(height: 12),
+          ],
           FeatureCard(
               icon: Icons.help_outline_rounded,
               title: tr(context, '幫助與生活資訊', 'Help and practical information'),
@@ -1206,6 +1310,8 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             onPressed: () => showModalBottomSheet<void>(
               context: context,
               showDragHandle: true,
+              isScrollControlled: true,
+              useSafeArea: true,
               builder: (_) => AccountSheet(user: controller.user!),
             ),
           ),
@@ -1230,7 +1336,7 @@ class AccountSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1389,6 +1495,10 @@ class ElderHome extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 10),
+          if (controller.api is AnswerCardApi) ...[
+            const _AnswerCardsFeature(),
+            const SizedBox(height: 10),
+          ],
           FeatureCard(
             icon: Icons.local_library_outlined,
             title: tr(context, '生活資源', 'Resources'),
@@ -1450,98 +1560,108 @@ class CaregiverHome extends ConsumerWidget {
             task.status != TaskStatus.completed &&
             task.status != TaskStatus.dismissed)
         .length;
-    return RefreshIndicator(
-      onRefresh: () => controller.refreshHome(),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
-        children: [
-          Text(tr(context, '照顧概覽', 'Care overview'),
-              style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 7),
-          Text(tr(context, '這裡只顯示長者明確授權的共享照顧事項。私密對話不會出現在照顧者帳戶。',
-              'Only care tasks shared with permission appear here. Private conversations are not visible to caregivers.')),
-          const SizedBox(height: 20),
-          Card(
-            color: const Color(0xFFF5E5D6),
-            child: Padding(
-              padding: const EdgeInsets.all(22),
-              child: Row(
-                children: [
-                  const Icon(Icons.volunteer_activism_rounded,
-                      color: Color(0xFF8B4E2D), size: 38),
-                  const SizedBox(width: 16),
-                  Expanded(
-                      child: Text(
-                          tr(context, '$active 項共享事項待處理',
-                              '$active shared tasks to do'),
-                          style: Theme.of(context).textTheme.titleLarge)),
-                ],
+    return TaskAccessRefresh(
+      controller: controller,
+      child: RefreshIndicator(
+        onRefresh: () => controller.refreshHome(),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+          children: [
+            Text(tr(context, '照顧概覽', 'Care overview'),
+                style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 7),
+            Text(tr(context, '你可更新自己的任務，並唯讀查看長者逐項確認分享的任務。私人對話不會分享。',
+                'Manage your own tasks and read tasks the senior explicitly shares. Private conversations stay private.')),
+            const SizedBox(height: 20),
+            Card(
+              color: const Color(0xFFF5E5D6),
+              child: Padding(
+                padding: const EdgeInsets.all(22),
+                child: Row(
+                  children: [
+                    const Icon(Icons.volunteer_activism_rounded,
+                        color: Color(0xFF8B4E2D), size: 38),
+                    const SizedBox(width: 16),
+                    Expanded(
+                        child: Text(
+                            tr(context, '$active 項未完成任務',
+                                '$active unfinished tasks'),
+                            style: Theme.of(context).textTheme.titleLarge)),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 20),
-          SectionTitle(
-              title: tr(context, '最近共享任務', 'Recent shared tasks'),
-              action: controller.tasks.isEmpty
-                  ? null
-                  : tr(context, '${controller.tasks.length} 項',
-                      '${controller.tasks.length} items')),
-          const SizedBox(height: 10),
-          if (controller.tasks.isEmpty)
-            EmptyCard(
-                icon: Icons.inbox_outlined,
-                message: tr(context, '長者確認共享事項後，任務會在這裡出現。',
-                    'Tasks appear here after the senior confirms sharing them.'))
-          else
-            ...controller.tasks.take(5).map((task) => TaskTile(task: task)),
-          const SizedBox(height: 22),
-          SectionTitle(title: tr(context, '需要時可以使用', 'More support')),
-          const SizedBox(height: 10),
-          FeatureCard(
-            icon: Icons.local_library_outlined,
-            title: tr(context, '生活資源', 'Resources'),
-            description: tr(context, '查看有來源、有日期的照顧資料。',
-                'Find care information with sources and dates.'),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const ResourcesScreen()),
+            const SizedBox(height: 20),
+            SectionTitle(
+                title: tr(context, '最近任務', 'Recent tasks'),
+                action: controller.tasks.isEmpty
+                    ? null
+                    : tr(context, '${controller.tasks.length} 項',
+                        '${controller.tasks.length} items')),
+            const SizedBox(height: 10),
+            if (controller.tasks.isEmpty)
+              EmptyCard(
+                  icon: Icons.inbox_outlined,
+                  message: tr(context, '長者確認共享事項後，任務會在這裡出現。',
+                      'Tasks appear here after the senior confirms sharing them.'))
+            else
+              ...controller.tasks
+                  .take(5)
+                  .map((task) => TaskTile(task: task, interactive: true)),
+            const SizedBox(height: 22),
+            SectionTitle(title: tr(context, '需要時可以使用', 'More support')),
+            const SizedBox(height: 10),
+            if (controller.api is AnswerCardApi) ...[
+              const _AnswerCardsFeature(),
+              const SizedBox(height: 10),
+            ],
+            FeatureCard(
+              icon: Icons.local_library_outlined,
+              title: tr(context, '生活資源', 'Resources'),
+              description: tr(context, '查看有來源、有日期的照顧資料。',
+                  'Find care information with sources and dates.'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                    builder: (_) => const ResourcesScreen()),
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          FeatureCard(
-            icon: Icons.forum_outlined,
-            title: tr(context, '家庭訊息', 'Family messages'),
-            description: tr(context, '只與有明確訊息授權的家庭成員聯絡。',
-                'Message family members who have granted permission.'),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                  builder: (_) => const FamilyMessagesScreen()),
-            ),
-          ),
-          if (controller.api is HumanGroupApi) ...[
             const SizedBox(height: 10),
             FeatureCard(
-              icon: Icons.groups_outlined,
-              title: tr(context, '人與人群聊', 'Human group chats'),
-              description: tr(context, '查看社區群聊邀請；AI 不參與。',
-                  'See community group invitations. No AI participates.'),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
-                  body: GroupLobbyScreen(
-                    api: controller.api as HumanGroupApi,
-                    accountId: controller.user!.id,
-                  ),
-                ),
-              )),
+              icon: Icons.forum_outlined,
+              title: tr(context, '家庭訊息', 'Family messages'),
+              description: tr(context, '只與有明確訊息授權的家庭成員聯絡。',
+                  'Message family members who have granted permission.'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                    builder: (_) => const FamilyMessagesScreen()),
+              ),
             ),
+            if (controller.api is HumanGroupApi) ...[
+              const SizedBox(height: 10),
+              FeatureCard(
+                icon: Icons.groups_outlined,
+                title: tr(context, '人與人群聊', 'Human group chats'),
+                description: tr(context, '查看社區群聊邀請；AI 不參與。',
+                    'See community group invitations. No AI participates.'),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: Text(tr(context, '群聊', 'Groups'))),
+                    body: GroupLobbyScreen(
+                      api: controller.api as HumanGroupApi,
+                      accountId: controller.user!.id,
+                    ),
+                  ),
+                )),
+              ),
+            ],
+            if (controller.errorMessage != null) ...[
+              const SizedBox(height: 18),
+              ErrorBanner(
+                  message: controller.errorMessage!,
+                  onRetry: () => controller.refreshHome()),
+            ],
           ],
-          if (controller.errorMessage != null) ...[
-            const SizedBox(height: 18),
-            ErrorBanner(
-                message: controller.errorMessage!,
-                onRetry: () => controller.refreshHome()),
-          ],
-        ],
+        ),
       ),
     );
   }
@@ -1896,8 +2016,8 @@ class MessageBubble extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(tr(context, '只有按下保存後才會寫入你的記憶庫。你可以先修改內容。',
-                  'This enters your Memory Library only after you save. You can edit it first.')),
+              Text(tr(context, '這份手動草稿在你按保存前不會寫入記憶。你可以先修改內容。',
+                  'This manual draft is not saved to Memory until you choose Save. You can edit it first.')),
               const SizedBox(height: 12),
               TextField(
                   controller: editor,
@@ -1957,6 +2077,18 @@ class MessageBubble extends ConsumerWidget {
                     color: mine ? Colors.white : Colors.black87,
                     fontSize: 18,
                     height: 1.45)),
+            if (!mine && !message.pending && message.body.trim().isNotEmpty &&
+                controller.api is AnswerCardApi &&
+                (controller.session != null || controller.guestSession != null) &&
+                message.metadata['mode'] != 'error' &&
+                !const ['pending', 'processing', 'error', 'failed'].contains(message.metadata['status'])) ...[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                  key: ValueKey('answer-card-action-${message.id}'),
+                  onPressed: () => _openAnswerCardDraft(context, ref, message),
+                  icon: const Icon(Icons.description_outlined),
+                  label: Text(tr(context, '整理為答案卡', 'Make answer card'))),
+            ],
             if (!mine && message.retrievalMode != null) ...[
               const SizedBox(height: 10),
               Container(
@@ -1998,8 +2130,8 @@ class MessageBubble extends ConsumerWidget {
                     Expanded(
                       child: Text(tr(
                         context,
-                        '記憶已開啟：我自動保存了這項普通偏好。你可在「我的記憶」查看、修改或刪除。',
-                        'Memory is on: I saved this ordinary preference automatically. View, edit or delete it in My memories.',
+                        '記憶已開啟：我自動保存了這個普通偏好。可在「我的記憶」查看、修改、暫停或刪除。',
+                        'Memory is on: I saved this ordinary preference automatically. View, edit, pause or delete it in My memories.',
                       )),
                     ),
                   ],
@@ -2269,39 +2401,42 @@ class TasksScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
     final elder = controller.isElder;
-    return RefreshIndicator(
-      onRefresh: () => controller.refreshHome(),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
-        children: [
-          Text(
-              elder
-                  ? tr(context, '我的任務', 'My tasks')
-                  : tr(context, '共享任務', 'Shared tasks'),
-              style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 7),
-          Text(
-              elder
-                  ? tr(context, '確認後建立的照顧事項會在這裡追蹤。',
-                      'Track care tasks you have confirmed here.')
-                  : tr(context, '只顯示長者授權共享的照顧事項。',
-                      'Only care tasks shared with permission appear here.'),
-              style: Theme.of(context).textTheme.bodyLarge),
-          const SizedBox(height: 18),
-          if (controller.tasks.isEmpty)
-            EmptyCard(
-                icon: Icons.checklist_rounded,
-                message: tr(context, '目前沒有任務。', 'No tasks yet.'))
-          else
-            ...controller.tasks
-                .map((task) => TaskTile(task: task, interactive: true)),
-          if (controller.errorMessage != null) ...[
+    return TaskAccessRefresh(
+      controller: controller,
+      child: RefreshIndicator(
+        onRefresh: () => controller.refreshHome(),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
+          children: [
+            Text(
+                elder
+                    ? tr(context, '我的任務', 'My tasks')
+                    : tr(context, '我的與共享任務', 'My and shared tasks'),
+                style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 7),
+            Text(
+                elder
+                    ? tr(context, '確認後建立的照顧事項會在這裡追蹤。',
+                        'Track care tasks you have confirmed here.')
+                    : tr(context, '你可更新自己的任務；長者分享的任務只供閱讀。',
+                        'Manage your own tasks. Tasks the senior shares are read-only.'),
+                style: Theme.of(context).textTheme.bodyLarge),
             const SizedBox(height: 18),
-            ErrorBanner(
-                message: controller.errorMessage!,
-                onRetry: () => controller.refreshHome())
+            if (controller.tasks.isEmpty)
+              EmptyCard(
+                  icon: Icons.checklist_rounded,
+                  message: tr(context, '目前沒有任務。', 'No tasks yet.'))
+            else
+              ...controller.tasks
+                  .map((task) => TaskTile(task: task, interactive: true)),
+            if (controller.errorMessage != null) ...[
+              const SizedBox(height: 18),
+              ErrorBanner(
+                  message: controller.errorMessage!,
+                  onRetry: () => controller.refreshHome())
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -2320,24 +2455,35 @@ class TaskTile extends ConsumerWidget {
     final complete = task.status == TaskStatus.completed;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-        leading: CircleAvatar(
-            backgroundColor:
-                complete ? const Color(0xFFDDEDEA) : const Color(0xFFFFE5C1),
-            child: Icon(complete ? Icons.check_rounded : Icons.schedule_rounded,
-                color: const Color(0xFF116466))),
-        title: Text(task.title,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-        subtitle: Text(
-            task.description.isEmpty
-                ? _taskStatusLabel(context, task.status)
-                : '${task.description}\n${_taskStatusLabel(context, task.status)}',
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis),
-        isThreeLine: task.description.isNotEmpty,
-        trailing: interactive && !complete
-            ? TextButton(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            CircleAvatar(
+              backgroundColor:
+                  complete ? const Color(0xFFDDEDEA) : const Color(0xFFFFE5C1),
+              child: Icon(
+                  complete ? Icons.check_rounded : Icons.schedule_rounded,
+                  color: const Color(0xFF116466)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(task.title,
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700))),
+          ]),
+          if (task.description.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(task.description,
+                maxLines: 3, overflow: TextOverflow.ellipsis),
+          ],
+          const SizedBox(height: 8),
+          Text(_taskStatusLabel(context, task.status)),
+          if (task.isReadOnly)
+            Text(tr(context, '家屬共享 · 只供閱讀', 'Shared with you · Read-only')),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            if (interactive && !complete && controller.canUpdateTask(task))
+              TextButton(
                 onPressed: updating
                     ? null
                     : () =>
@@ -2347,21 +2493,56 @@ class TaskTile extends ConsumerWidget {
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2))
-                    : Text(tr(context, '完成', 'Complete')))
-            : Text(_taskStatusLabel(context, task.status)),
+                    : Text(tr(context, '完成', 'Complete')),
+              ),
+            if (controller.api is TaskSharingApi)
+              TextButton(
+                onPressed: () async {
+                  await Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => TaskDetailsScreen(
+                        controller: controller, taskId: task.id),
+                  ));
+                  if (context.mounted && controller.isCaregiver) {
+                    await controller.refreshTasks();
+                  }
+                },
+                child: Text(tr(context, '查看完整任務', 'View full task')),
+              ),
+            if (controller.canShareTask(task))
+              OutlinedButton.icon(
+                onPressed: () =>
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => TaskSharingScreen(
+                      controller: controller, taskId: task.id),
+                )),
+                icon: const Icon(Icons.share_outlined),
+                label: Text(tr(context, '分享／管理分享', 'Share / Manage sharing')),
+              ),
+          ]),
+        ]),
       ),
     );
   }
 }
 
-class FamilyScreen extends ConsumerStatefulWidget {
+class FamilyScreen extends ConsumerWidget {
   const FamilyScreen({super.key});
-
   @override
-  ConsumerState<FamilyScreen> createState() => _FamilyScreenState();
+  Widget build(BuildContext context, WidgetRef ref) =>
+      ref.watch(appControllerProvider).supportsFamilyConnections
+          ? const FamilyConnectionsScreen()
+          : const LegacyFamilyInvitesScreen();
 }
 
-class _FamilyScreenState extends ConsumerState<FamilyScreen> {
+class LegacyFamilyInvitesScreen extends ConsumerStatefulWidget {
+  const LegacyFamilyInvitesScreen({this.showLinks = true, super.key});
+  final bool showLinks;
+
+  @override
+  ConsumerState<LegacyFamilyInvitesScreen> createState() => _FamilyScreenState();
+}
+
+class _FamilyScreenState extends ConsumerState<LegacyFamilyInvitesScreen> {
   final _emailController = TextEditingController();
   final _tokenController = TextEditingController();
   bool _includeFamilyMessages = false;
@@ -2484,7 +2665,7 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
                   invitation: inv, onAccept: () => _accept(inv))),
           ],
           const SizedBox(height: 22),
-          if (controller.links.isNotEmpty) ...[
+          if (widget.showLinks && controller.links.isNotEmpty) ...[
             Text(tr(context, '目前連結', 'Current links'),
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 9),
@@ -2505,43 +2686,33 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
 }
 
 class InvitationTile extends StatelessWidget {
-  const InvitationTile(
-      {required this.invitation, this.onAccept, this.onRevoke, super.key});
-
+  const InvitationTile({required this.invitation, this.onAccept, this.onRevoke, super.key});
   final FamilyInvitation invitation;
   final VoidCallback? onAccept;
   final VoidCallback? onRevoke;
-
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-        leading: Icon(invitation.status == InvitationStatus.accepted
-            ? Icons.link_rounded
-            : Icons.mail_outline_rounded),
-        title: Text(
-            invitation.name?.isNotEmpty == true
-                ? invitation.name!
-                : invitation.email,
+  Widget build(BuildContext context) => Card(
+    margin: const EdgeInsets.only(bottom: 10),
+    child: Padding(padding: const EdgeInsets.all(16), child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(invitation.name?.isNotEmpty == true ? invitation.name! : invitation.email,
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-        subtitle: Text(
-          '${invitation.email}\n${_invitationStatusLabel(context, invitation.status)}'
-          '${invitation.allowsFamilyMessages ? tr(context, '\n已允許家庭訊息', '\nFamily messages allowed') : ''}',
-        ),
-        isThreeLine: invitation.allowsFamilyMessages,
-        trailing: onAccept != null
-            ? TextButton(
-                onPressed: onAccept, child: Text(tr(context, '接受', 'Accept')))
-            : onRevoke != null && invitation.status != InvitationStatus.revoked
-                ? TextButton(
-                    onPressed: onRevoke,
-                    child: Text(tr(context, '撤回', 'Revoke')))
-                : null,
-      ),
-    );
-  }
+        Text(invitation.email),
+        Text('ID: ${invitation.id}'),
+        if (invitation.elderId != null) Text('Elder ID: ${invitation.elderId}'),
+        if (invitation.caregiverId != null) Text('Caregiver ID: ${invitation.caregiverId}'),
+        Text(_invitationStatusLabel(context, invitation.status)),
+        if (invitation.allowsFamilyMessages) Text(tr(context, '允許家庭訊息', 'Family messages allowed')),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          if (onAccept != null && invitation.status == InvitationStatus.pending)
+            TextButton(onPressed: onAccept, child: Text(tr(context, '接受', 'Accept'))),
+          if (onRevoke != null && (invitation.status == InvitationStatus.pending || invitation.status == InvitationStatus.accepted))
+            TextButton(onPressed: onRevoke, child: Text(tr(context, '撤回', 'Revoke'))),
+        ]),
+      ],
+    )),
+  );
 }
 
 class FeatureCard extends StatelessWidget {
@@ -2604,17 +2775,48 @@ class MemoriesScreen extends ConsumerStatefulWidget {
 
 class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
   final _searchController = TextEditingController();
+  final _scrollController = ScrollController();
+  final _savedKey = GlobalKey();
+  final _selectedRows = <String, MemoryRecord>{};
+  bool _viewSavedOnly = false;
+
+  Future<void> _refresh() async {
+    final controller = ref.read(appControllerProvider);
+    await controller.refreshMemoryControlState();
+    await controller.refreshMemories(silent: true);
+  }
+
+  void _viewSaved() {
+    setState(() => _viewSavedOnly = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _savedKey.currentContext;
+      if (target != null) {
+        Scrollable.ensureVisible(target, duration: const Duration(milliseconds: 250));
+      }
+    });
+  }
+
+  void _deleted() {
+    if (mounted) setState(_selectedRows.clear);
+  }
+
+  void _select(MemoryRecord memory, bool value) {
+    setState(() {
+      if (value) { _selectedRows[memory.id] = memory; }
+      else { _selectedRows.remove(memory.id); }
+    });
+  }
 
   @override
   void initState() {
     super.initState();
-    Future<void>.microtask(
-        () => ref.read(appControllerProvider).refreshMemories(silent: true));
+    Future<void>.microtask(_refresh);
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -2653,24 +2855,9 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
   }
 
   Future<void> _delete(MemoryRecord memory) async {
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(tr(context, '刪除這項記憶？', 'Delete this memory?')),
-        content: Text(tr(context, '相關故事卡和聊天引用也會由服務撤回或遮蔽。這個操作無法還原。',
-            'Related story cards and chat references will be withdrawn or redacted. This cannot be undone.')),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(tr(context, '返回', 'Back'))),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(tr(context, '確認刪除', 'Delete'))),
-        ],
-      ),
-    );
-    if (accepted != true || !mounted) return;
-    await ref.read(appControllerProvider).deleteMemory(memory);
+    final deleted = await reviewMemoryDeletion(context,
+        ref.read(appControllerProvider), mode: 'selected', memoryIds: [memory.id]);
+    if (deleted) _deleted();
   }
 
   Future<void> _suppress(MemoryRecord memory) async {
@@ -2704,20 +2891,42 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
     final controller = ref.watch(appControllerProvider);
     final results = controller.memorySearchResults;
     final memories = controller.memories;
+    final currentRows = {for (final m in [...memories, ...results]) m.id: m};
+    // Selection belongs to the exact rows the user reviewed. A consent or
+    // remote revision change requires selecting again, not silent rebasing.
+    if (_selectedRows.values.any((selected) {
+      final current = currentRows[selected.id];
+      return selected.revision != controller.memoryRevision ||
+          current == null ||
+          current.revision != selected.revision ||
+          current.content != selected.content ||
+          current.kind != selected.kind ||
+          current.status != selected.status ||
+          current.suppressed != selected.suppressed ||
+          current.sourceMessageId != selected.sourceMessageId;
+    })) {
+      _selectedRows.clear();
+    }
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, '我的記憶', 'My memories'))),
       body: RefreshIndicator(
-        onRefresh: () => controller.refreshMemories(),
+        onRefresh: _refresh,
         child: ListView(
+          controller: _scrollController,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
           children: [
+            MemoryControlsPanel(controller: controller,
+              selectedIds: _selectedRows.keys.where((id) => memories.any((m) => m.id == id) || results.any((m) => m.id == id)).toList(),
+              onView: _viewSaved, onDeleted: _deleted),
+            const SizedBox(height: 18),
+            if (!_viewSavedOnly) ...[
             Text(tr(context, '由你管理記憶', 'Your memory, under your control'),
                 style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 7),
             Text(tr(
                 context,
-                '記憶預設關閉。開啟後，只有在已設定的 AI 模型可用時，安心伴才會自動保存清楚、普通的興趣；示範模式不會自動保存。其他或不確定內容若要保存，需逐項確認。你可以查看、修改、暫停使用或刪除記憶；情緒不會自動保存。',
-                'Memory is off by default. When enabled, Anxin may automatically save clear, ordinary interests only when a configured AI model is available; demo mode does not auto-save. Other or uncertain details require item-level confirmation before saving. You can view, edit, pause or delete memories. Emotions are never auto-saved.')),
+                 '記憶預設關閉。你開啟後，清楚的普通偏好可自動保存，無需逐項按保存。敏感、不確定及其他內容須你逐項確認。你可查看、修改、暫停或刪除記憶。關閉記憶會停止收集和使用。分享給家人仍須你明確確認。自動保存須有已設定的 AI 模型；示範模式不會自動保存。情緒不會自動保存。',
+                'Memory is off by default. After you turn it on, clear, ordinary preferences may be saved automatically without saving each one. Sensitive, uncertain and other details need your confirmation for each item. You can view, edit, pause or delete memories. Turning Memory off stops collection and use. Sharing with family still needs your explicit confirmation. Automatic saving requires a configured AI model; demo mode does not auto-save. Emotions are never auto-saved.')),
             const SizedBox(height: 18),
             Row(
               children: [
@@ -2759,10 +2968,14 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
                   memory: memory,
                   onEdit: _edit,
                   onDelete: _delete,
-                  onSuppress: _suppress)),
+                  onSuppress: _suppress,
+                  selected: _selectedRows.containsKey(memory.id),
+                  onSelected: (value) => _select(memory, value))),
+            ],
             ],
             const SizedBox(height: 18),
             SectionTitle(
+                key: _savedKey,
                 title: tr(context, '已保存及候選', 'Saved and candidates'),
                 action: memories.isEmpty
                     ? null
@@ -2781,7 +2994,9 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
                   memory: memory,
                   onEdit: _edit,
                   onDelete: _delete,
-                  onSuppress: _suppress)),
+                  onSuppress: _suppress,
+                  selected: _selectedRows.containsKey(memory.id),
+                  onSelected: (value) => _select(memory, value))),
             if (controller.errorMessage != null) ...[
               const SizedBox(height: 14),
               ErrorBanner(
@@ -2801,9 +3016,13 @@ class MemoryCard extends ConsumerWidget {
       required this.onEdit,
       required this.onDelete,
       required this.onSuppress,
+      this.selected = false,
+      this.onSelected,
       super.key});
 
   final MemoryRecord memory;
+  final bool selected;
+  final ValueChanged<bool>? onSelected;
   final Future<void> Function(MemoryRecord) onEdit;
   final Future<void> Function(MemoryRecord) onDelete;
   final Future<void> Function(MemoryRecord) onSuppress;
@@ -2811,13 +3030,17 @@ class MemoryCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
-    final busy = controller.updatingMemoryIds.contains(memory.id);
+    final busy = controller.updatingMemoryIds.contains(memory.id) ||
+        controller.memoryDeletionBusy ||
+        controller.pendingMemoryDeletion != null;
+    final canDelete = controller.supportsMemoryControls && !busy;
     final status = memory.suppressed
         ? tr(context, '已暫停使用', 'Paused')
         : (memory.isCandidate
             ? tr(context, '候選，等待你確認', 'Candidate, awaiting confirmation')
             : memory.captureMethod == 'agent_auto'
-                ? tr(context, '已自動保存', 'Saved automatically')
+                ? tr(context, '已自動保存（待覆核）',
+                    'Saved automatically (review pending)')
                 : tr(context, '已確認', 'Confirmed'));
     final captureLabel = switch (memory.captureMethod) {
       'agent_auto' => tr(context, '來源：你開啟記憶後，安心伴從對話自動保存',
@@ -2834,14 +3057,22 @@ class MemoryCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              Expanded(
-                  child: Text(status,
-                      style: const TextStyle(
-                          color: Color(0xFF116466),
-                          fontWeight: FontWeight.w700))),
+            if (onSelected != null)
+              CheckboxListTile(
+                key: ValueKey('select-memory-${memory.id}'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: selected,
+                onChanged:
+                    canDelete ? (value) => onSelected!(value ?? false) : null,
+                title: Text(tr(context, '選擇此記憶', 'Select this memory')),
+              ),
+            Wrap(spacing: 12, runSpacing: 6, children: [
+              Text(status,
+                  style: const TextStyle(
+                      color: Color(0xFF116466), fontWeight: FontWeight.w700)),
               Text(_memoryKindLabel(context, memory.kind),
-                  style: Theme.of(context).textTheme.bodyMedium)
+                  style: Theme.of(context).textTheme.bodyMedium),
             ]),
             const SizedBox(height: 8),
             Text(memory.content, style: Theme.of(context).textTheme.bodyLarge),
@@ -2857,6 +3088,30 @@ class MemoryCard extends ConsumerWidget {
                       onPressed:
                           busy ? null : () => controller.confirmMemory(memory),
                       child: Text(tr(context, '確認保存', 'Confirm and save'))),
+                if (controller.isElder &&
+                    memory.isConfirmed &&
+                    !memory.suppressed)
+                  OutlinedButton(
+                      key: ValueKey('create-private-card-${memory.id}'),
+                      onPressed: busy || controller.loading
+                          ? null
+                          : () async {
+                              final draft =
+                                  controller.prepareMemoryCardDraft(memory);
+                              if (draft == null) {
+                                await controller.refreshMemoryControlState();
+                                return;
+                              }
+                              if (!context.mounted) return;
+                              await showDialog<void>(
+                                  context: context,
+                                  builder: (_) => StoryComposerDialog(
+                                      memories: [memory],
+                                      controller: controller,
+                                      cardDraft: draft));
+                            },
+                      child:
+                          Text(tr(context, '建立私人卡片', 'Create private card'))),
                 OutlinedButton(
                     onPressed: busy ? null : () => onEdit(memory),
                     child: Text(tr(context, '修改', 'Edit'))),
@@ -2866,7 +3121,7 @@ class MemoryCard extends ConsumerWidget {
                         ? tr(context, '恢復使用', 'Restore')
                         : tr(context, '暫停使用', 'Pause'))),
                 TextButton(
-                    onPressed: busy ? null : () => onDelete(memory),
+                    onPressed: canDelete ? () => onDelete(memory) : null,
                     child: Text(tr(context, '刪除', 'Delete'))),
               ],
             ),
@@ -2888,23 +3143,33 @@ class _StoriesScreenState extends ConsumerState<StoriesScreen> {
   @override
   void initState() {
     super.initState();
-    Future<void>.microtask(
-        () => ref.read(appControllerProvider).refreshStories(silent: true));
+    Future<void>.microtask(_refresh);
+  }
+
+  Future<void> _refresh() async {
+    final controller = ref.read(appControllerProvider);
+    await controller.refreshMemoryControlState();
+    await controller.refreshMemories(silent: true);
+    await controller.refreshStories(silent: true);
   }
 
   Future<void> _create() async {
     final controller = ref.read(appControllerProvider);
-    final draft = await showDialog<StoryDraft>(
+    final draft = controller.prepareStoryCreateDraft();
+    if (draft == null) {
+      await controller.refreshMemoryControlState();
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
       context: context,
       builder: (_) => StoryComposerDialog(
         memories: controller.memories
             .where((memory) => memory.isConfirmed && !memory.suppressed)
             .toList(),
+        controller: controller, cardDraft: draft, selectSources: true,
       ),
     );
-    if (draft == null || !mounted) return;
-    await controller.createStory(
-        title: draft.title, content: draft.content, memoryIds: draft.memoryIds);
   }
 
   Future<void> _delete(StoryRecord story) async {
@@ -2932,18 +3197,30 @@ class _StoriesScreenState extends ConsumerState<StoriesScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
+    if (!controller.isElder) {
+      return Scaffold(
+          body: Center(
+              child: Text(tr(context, '私人卡片只供本人查看。',
+                  'Private cards are visible only to their owner.'))));
+    }
+    final missingMemoryState =
+        controller.supportsMemoryControls && controller.memoryRevision == null;
+    final canCreate = !controller.loading &&
+        !missingMemoryState &&
+        !controller.memoryDeletionBusy &&
+        controller.pendingMemoryDeletion == null;
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, '故事卡', 'Story cards')),
         actions: [
           IconButton(
               tooltip: tr(context, '建立故事卡', 'Create story card'),
-              onPressed: controller.loading ? null : _create,
+              onPressed: canCreate ? _create : null,
               icon: const Icon(Icons.add_rounded))
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () => controller.refreshStories(),
+        onRefresh: _refresh,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
           children: [
@@ -2953,8 +3230,22 @@ class _StoriesScreenState extends ConsumerState<StoriesScreen> {
             Text(tr(context, '故事由你寫、由你刪除。分享前一定會顯示收件人和完整內容讓你確認。',
                 'You write and delete your stories. Before sharing, review the recipient and full content.')),
             const SizedBox(height: 18),
+            if (missingMemoryState) ...[
+              Text(tr(context, '請先重新載入記憶，再建立故事卡。',
+                  'Refresh your memories before creating a story card.')),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                key: const ValueKey('refresh-story-memories'),
+                onPressed: controller.loading || controller.memoryDeletionBusy
+                    ? null
+                    : _refresh,
+                child: Text(tr(context, '重新載入記憶', 'Refresh memories'),
+                    textAlign: TextAlign.center),
+              ),
+              const SizedBox(height: 12),
+            ],
             FilledButton.icon(
-                onPressed: controller.loading ? null : _create,
+                onPressed: canCreate ? _create : null,
                 icon: const Icon(Icons.add_rounded),
                 label: Text(tr(context, '建立故事卡', 'Create story card')),
                 style: FilledButton.styleFrom(
@@ -2991,7 +3282,12 @@ class StoryDraft {
 }
 
 class StoryComposerDialog extends StatefulWidget {
-  const StoryComposerDialog({required this.memories, super.key});
+  const StoryComposerDialog(
+      {required this.memories, this.controller, this.cardDraft, this.selectSources = false, super.key});
+
+  final AppController? controller;
+  final MemoryCardDraft? cardDraft;
+  final bool selectSources;
 
   final List<MemoryRecord> memories;
 
@@ -3003,84 +3299,186 @@ class _StoryComposerDialogState extends State<StoryComposerDialog> {
   late final TextEditingController _title;
   late final TextEditingController _content;
   final Set<String> _selected = <String>{};
+  MemoryCardDraft? _activeDraft;
+  bool _saving = false;
+  bool _closing = false;
+  String? _validation;
 
   @override
   void initState() {
     super.initState();
-    _title = TextEditingController();
-    _content = TextEditingController();
+    _activeDraft = widget.cardDraft;
+    _title = TextEditingController(text: widget.cardDraft?.title ?? '');
+    _content = TextEditingController(text: widget.cardDraft?.content ?? '');
+    widget.controller?.addListener(_changed);
+  }
+
+  void _changed() {
+    final draft = _activeDraft;
+    if (!mounted || _closing || draft == null) return;
+    if (!widget.controller!.isMemoryCardDraftCurrent(draft)) {
+      _closing = true;
+      // Drop RAM text immediately; never attach it to another session.
+      _title.clear();
+      _content.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.pop(context);
+      });
+    } else {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
+    widget.controller?.removeListener(_changed);
     _title.dispose();
     _content.dispose();
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final title = _title.text.trim();
+    final content = _content.text.trim();
+    if (title.isEmpty ||
+        content.isEmpty ||
+        title.runes.length > 240 ||
+        content.runes.length > 30000) {
+      setState(() => _validation = tr(context, '請填寫標題（最多240字）及內容（最多30,000字）。',
+          'Enter a title (up to 240 characters) and content (up to 30,000 characters).'));
+      return;
+    }
+    if (_activeDraft == null) {
+      Navigator.pop(
+          context,
+          StoryDraft(
+              title: title, content: content, memoryIds: _selected.toList()));
+      return;
+    }
+    if (_saving) return;
+    if (!widget.controller!.isMemoryCardDraftCurrent(_activeDraft!)) {
+      _changed();
+      return;
+    }
+    if (widget.selectSources) {
+      final selectedDraft = widget.controller!.prepareStoryCreateDraft(
+        memoryIds: _selected.toList());
+      if (selectedDraft == null || selectedDraft.revision != _activeDraft!.revision) {
+        _changed();
+        return;
+      }
+      _activeDraft = selectedDraft;
+    }
+    setState(() {
+      _saving = true;
+      _validation = null;
+    });
+    final ok = await widget.controller!
+        .saveMemoryCardDraft(_activeDraft!, title: title, content: content);
+    if (!mounted || _closing) return;
+    if (ok) {
+      _closing = true;
+      Navigator.pop(context);
+    } else {
+      setState(() => _saving = false);
+      _changed();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final draft = _activeDraft;
+    final editing = draft?.storyId != null;
+    final busy = _saving || (widget.controller?.loading ?? false);
     return AlertDialog(
-      title: Text(tr(context, '建立故事卡', 'Create story card')),
+      insetPadding: const EdgeInsets.all(12),
+      scrollable: true,
+      title: Text(editing
+          ? tr(context, '編輯私人卡片', 'Edit private card')
+          : draft != null
+              ? tr(context, '建立私人卡片', 'Create private card')
+              : tr(context, '建立故事卡', 'Create story card')),
       content: SizedBox(
-        width: 520,
-        child: SingleChildScrollView(
+          width: 520,
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Text(tr(context, '私人：儲存不會分享給家人。',
+                  'Private: saving does not share with family.')),
+              if (editing) ...[
+                const SizedBox(height: 12),
+                Text(tr(
+                    context,
+                    '儲存編輯後，舊的站內分享內容會撤回。新內容須重新預覽、選擇收件人並確認傳送；不會自動重發。',
+                    'Saving edits withdraws old in-app shared content. Sharing the new content requires a new preview, recipient selection and confirmation; it will not be resent automatically.')),
+              ],
+              const SizedBox(height: 12),
               TextField(
+                  key: const ValueKey('private-card-title'),
                   controller: _title,
+                  readOnly: busy,
                   decoration: InputDecoration(
                       labelText: tr(context, '故事標題', 'Story title'))),
               const SizedBox(height: 12),
               TextField(
+                  key: const ValueKey('private-card-content'),
                   controller: _content,
+                  readOnly: busy,
                   minLines: 4,
                   maxLines: 8,
                   decoration: InputDecoration(
                       labelText: tr(context, '故事內容', 'Story content'))),
-              if (widget.memories.isNotEmpty) ...[
+              if (draft != null && !widget.selectSources) ...[
                 const SizedBox(height: 16),
-                Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                        tr(context, '引用哪些記憶？',
-                            'Which memories would you like to reference?'),
-                        style: TextStyle(fontWeight: FontWeight.w700))),
+                Text(tr(context, '來源（唯讀）', 'Sources (read-only)'),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                for (final id in draft.memoryIds) ...[
+                  const SizedBox(height: 8),
+                  Text(tr(context, '來源：$id', 'Source: $id')),
+                  for (final memory in widget.memories.where((m) => m.id == id))
+                    Text(memory.content),
+                ],
+              ] else if (widget.memories.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                    tr(context, '想引用哪些記憶？',
+                        'Which memories would you like to reference?'),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
                 ...widget.memories.map((memory) => CheckboxListTile(
-                      dense: true,
-                      value: _selected.contains(memory.id),
-                      onChanged: (value) => setState(() => value == true
-                          ? _selected.add(memory.id)
-                          : _selected.remove(memory.id)),
-                      title: Text(memory.content,
-                          maxLines: 2, overflow: TextOverflow.ellipsis),
-                      controlAffinity: ListTileControlAffinity.leading,
-                    )),
+                    dense: true,
+                    value: _selected.contains(memory.id),
+                    onChanged: busy ? null : (value) => setState(() => value == true
+                        ? _selected.add(memory.id)
+                        : _selected.remove(memory.id)),
+                    title: Text(memory.content),
+                    controlAffinity: ListTileControlAffinity.leading)),
               ],
+              if (_validation != null) ...[
+                const SizedBox(height: 12),
+                Text(_validation!)
+              ],
+              if (widget.controller?.errorMessage != null) ...[
+                const SizedBox(height: 12),
+                Text(widget.controller!.errorMessage!)
+              ],
+              const SizedBox(height: 16),
+              OutlinedButton(
+                  key: const ValueKey('cancel-private-card'),
+                  onPressed: busy ? null : () => Navigator.pop(context),
+                  child: Text(tr(context, '返回', 'Back'),
+                      textAlign: TextAlign.center)),
+              const SizedBox(height: 8),
+              FilledButton(
+                  key: const ValueKey('save-private-card'),
+                  onPressed: busy ? null : _save,
+                  child: Text(
+                      draft == null
+                          ? tr(context, '建立', 'Create')
+                          : tr(context, '儲存', 'Save'),
+                      textAlign: TextAlign.center)),
             ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(tr(context, '返回', 'Back'))),
-        FilledButton(
-          onPressed: () {
-            if (_title.text.trim().isEmpty || _content.text.trim().isEmpty) {
-              return;
-            }
-            Navigator.pop(
-                context,
-                StoryDraft(
-                    title: _title.text,
-                    content: _content.text,
-                    memoryIds: _selected.toList()));
-          },
-          child: Text(tr(context, '建立', 'Create')),
-        ),
-      ],
+          )),
     );
   }
 }
@@ -3094,11 +3492,16 @@ class StoryCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
+    if (!controller.isElder) return const SizedBox.shrink();
+    final tooLongToShare =
+        '${story.title}\n${story.content}'.runes.length > 10000;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr(context, '私人卡片', 'Private card')),
+          const SizedBox(height: 8),
           Text(story.title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(story.content, style: Theme.of(context).textTheme.bodyLarge),
@@ -3110,11 +3513,35 @@ class StoryCard extends ConsumerWidget {
                 style: Theme.of(context).textTheme.bodyMedium),
           ],
           const SizedBox(height: 9),
+          if (tooLongToShare)
+            Text(tr(context, '全文超過10,000字，無法分享；請先編輯卡片。',
+                'The full card exceeds 10,000 characters and cannot be shared. Edit the card first.')),
           Wrap(spacing: 8, children: [
+            if (controller.isElder)
+              OutlinedButton(
+                  key: ValueKey('edit-private-card-${story.id}'),
+                  onPressed: controller.loading
+                      ? null
+                      : () async {
+                          final draft = controller.prepareStoryEditDraft(story);
+                          if (draft == null) {
+                            await controller.refreshMemoryControlState();
+                            return;
+                          }
+                          if (!context.mounted) return;
+                          await showDialog<void>(
+                              context: context,
+                              builder: (_) => StoryComposerDialog(
+                                  memories: controller.memories,
+                                  controller: controller,
+                                  cardDraft: draft));
+                        },
+                  child: Text(tr(context, '編輯卡片', 'Edit card'))),
             if (controller.familyMessageLinks.isNotEmpty)
               FilledButton.tonal(
-                onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
+                onPressed: tooLongToShare
+                    ? null
+                    : () => Navigator.of(context).push(MaterialPageRoute<void>(
                         builder: (_) =>
                             FamilyMessagesScreen(initialStory: story))),
                 child: Text(tr(context, '分享給家庭成員', 'Share with family')),
@@ -3381,36 +3808,102 @@ class _FamilyMessagesScreenState extends ConsumerState<FamilyMessagesScreen> {
   final _contentController = TextEditingController();
   FamilyInvitation? _selected;
   bool _reviewing = false;
+  FamilyInvitation? _previewLink;
+  String? _previewContent;
+  bool _previewRetired = false;
+  late final AppController _sourceController;
+  late final AuthSession? _sourceSession;
+  late final String? _sourceOwnerId;
+  bool _sourceInvalidated = false;
 
   @override
   void initState() {
     super.initState();
+    _sourceController = ref.read(appControllerProvider);
+    _sourceSession = _sourceController.session;
+    _sourceOwnerId = _sourceController.user?.id;
     final story = widget.initialStory;
     if (story != null) {
       _contentController.text = '${story.title}\n${story.content}';
     }
+    _sourceController.addListener(_sourceChanged);
     Future<void>.microtask(() =>
         ref.read(appControllerProvider).refreshFamilyMessages(silent: true));
   }
 
+  bool _sourceCurrent(AppController controller) {
+    final story = widget.initialStory;
+    if (_sourceInvalidated || !identical(controller, _sourceController) ||
+        !identical(controller.session, _sourceSession) ||
+        controller.user?.id != _sourceOwnerId) {
+      return false;
+    }
+    if (story == null) return true;
+    if (!controller.isElder ||
+        controller.memoryDeletionBusy || controller.pendingMemoryDeletion != null ||
+        controller.memoryRevision != story.revision) {
+      return false;
+    }
+    final matches = controller.stories.where((s) => s.id == story.id).toList();
+    if (matches.length != 1) return false;
+    final current = matches.single;
+    return current.revision == story.revision && current.title == story.title &&
+      current.content == story.content && current.memoryIds.length == story.memoryIds.length &&
+      current.memoryIds.toSet().containsAll(story.memoryIds);
+  }
+
+  void _clearSource() {
+    _sourceInvalidated = true;
+    _reviewing = false;
+    _selected = null;
+    _previewLink = null;
+    _previewContent = null;
+    _contentController.clear();
+  }
+
+  void _sourceChanged() {
+    if (!mounted || _sourceInvalidated) return;
+    if (!_sourceCurrent(_sourceController)) {
+      setState(_clearSource);
+    } else if (_selected != null && !_sourceController.familyMessageLinks.contains(_selected)) {
+      setState(() { _reviewing = false; _selected = null; _previewLink = null; _previewContent = null; _previewRetired = true; });
+    }
+  }
+
   @override
   void dispose() {
+    _sourceController.removeListener(_sourceChanged);
     _contentController.dispose();
     super.dispose();
   }
 
   Future<void> _send() async {
     final controller = ref.read(appControllerProvider);
-    final link = _selected;
-    if (link == null || _contentController.text.trim().isEmpty) return;
+    if (!_sourceCurrent(controller)) {
+      setState(_clearSource);
+      return;
+    }
+    final link = _reviewing ? _previewLink : null;
+    final content = _previewContent;
+    if (link != null && !controller.familyMessageLinks.contains(link)) {
+      setState(() { _reviewing = false; _selected = null; _previewLink = null; _previewContent = null; _previewRetired = true; });
+      return;
+    }
+    if (link == null || content == null ||
+        content.trim().isEmpty ||
+        content.runes.length > 10000) {
+      return;
+    }
     final ok = await controller.sendFamilyMessage(
       link: link,
-      content: _contentController.text,
+      content: content,
       sourceStory: widget.initialStory,
     );
     if (ok && mounted) {
       setState(() {
         _reviewing = false;
+        _previewLink = null;
+        _previewContent = null;
         if (widget.initialStory == null) _contentController.clear();
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3421,11 +3914,27 @@ class _FamilyMessagesScreenState extends ConsumerState<FamilyMessagesScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
+    if (!_sourceCurrent(controller)) {
+      _clearSource();
+      return Scaffold(appBar: AppBar(title: Text(tr(context, '家庭訊息', 'Family messages'))),
+        body: Center(child: Padding(padding: const EdgeInsets.all(20), child: Text(tr(context,
+          '卡片或帳戶已變更。請重新開啟目前的卡片並選擇收件人。',
+          widget.initialStory == null ? 'The account changed. Reopen family messages and choose a recipient.' : 'The card or account changed. Reopen the current card and choose a recipient.')))));
+    }
+    final tooLong = widget.initialStory != null &&
+        _contentController.text.runes.length > 10000;
     final links = controller.familyMessageLinks
         .where((link) => controller.recipientIdFor(link) != null)
         .toList();
+    if (_selected != null && !links.contains(_selected)) {
+      _reviewing = false;
+      _selected = null;
+      _previewLink = null;
+      _previewContent = null;
+      _previewRetired = true;
+    }
     if (_selected == null || !links.contains(_selected)) {
-      _selected = links.isEmpty ? null : links.first;
+      _selected = widget.initialStory != null || _previewRetired || links.isEmpty ? null : links.first;
     }
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, '家庭訊息', 'Family messages'))),
@@ -3438,20 +3947,26 @@ class _FamilyMessagesScreenState extends ConsumerState<FamilyMessagesScreen> {
           Text(tr(context, '長者私密聊天不會出現在這裡。每次發送前，你都會看到收件人和完整內容。',
               'Private chats do not appear here. Review the recipient and complete message before every send.')),
           const SizedBox(height: 18),
+          if (tooLong)
+            Text(tr(context, '全文超過10,000字，無法分享；請先編輯卡片。',
+                'The full card exceeds 10,000 characters and cannot be shared. Edit the card first.')),
           if (links.isEmpty)
             EmptyCard(
                 icon: Icons.lock_outline_rounded,
                 message: tr(context, '目前沒有開啟「家庭訊息」的家庭連結。請由長者重新發出邀請並主動勾選這項權限。',
                     'No family links have messaging enabled. The senior must send a new invitation and select Allow family messages.'))
-          else if (_reviewing)
+          else if (_reviewing && _previewLink != null)
             _FamilyMessageReview(
-                link: _selected!,
-                content: _contentController.text,
+                link: _previewLink!,
+                content: _previewContent!,
                 story: widget.initialStory,
-                onBack: () => setState(() => _reviewing = false),
-                onConfirm: controller.loading ? null : _send)
+                onBack: () => setState(() { _reviewing = false; _previewLink = null; _previewContent = null; }),
+                onConfirm: controller.loading || tooLong ? null : _send)
           else ...[
             DropdownButtonFormField<FamilyInvitation>(
+              isExpanded: true,
+              isDense: false,
+              itemHeight: null,
               initialValue: _selected,
               decoration: InputDecoration(
                   labelText: tr(context, '收件人', 'Recipient'),
@@ -3462,7 +3977,7 @@ class _FamilyMessagesScreenState extends ConsumerState<FamilyMessagesScreen> {
                       value: link,
                       child: Text(_counterpartLabel(context, controller, link)))
               ],
-              onChanged: (value) => setState(() => _selected = value),
+              onChanged: (value) => setState(() { _selected = value; _previewRetired = false; }),
             ),
             const SizedBox(height: 14),
             TextField(
@@ -3482,9 +3997,13 @@ class _FamilyMessagesScreenState extends ConsumerState<FamilyMessagesScreen> {
             ),
             const SizedBox(height: 14),
             FilledButton.icon(
-                onPressed: controller.loading
+                onPressed: controller.loading || tooLong || _selected == null
                     ? null
-                    : () => setState(() => _reviewing = true),
+                    : () => setState(() {
+                        _previewLink = _selected;
+                        _previewContent = _contentController.text;
+                        _reviewing = true;
+                      }),
                 icon: const Icon(Icons.visibility_outlined),
                 label: Text(tr(context, '檢視並確認發送', 'Review before sending')),
                 style: FilledButton.styleFrom(
@@ -3761,14 +4280,7 @@ String _invitationStatusLabel(BuildContext context, InvitationStatus status) =>
     };
 String _counterpartLabel(
     BuildContext context, AppController controller, FamilyInvitation link) {
-  final name =
-      ((controller.isElder ? link.caregiverName : link.elderName) ?? link.name)
-          ?.trim();
-  return name != null && name.isNotEmpty
-      ? name
-      : link.email.isNotEmpty
-          ? link.email
-          : tr(context, '家庭成員', 'Family member');
+  return controller.familyCounterpartLabel(link);
 }
 
 String _errorLabel(BuildContext context, String message) {
@@ -4066,8 +4578,14 @@ class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
       appBar: AppBar(title: Text(tr(context, '社區參與', 'Community'))),
       body: RefreshIndicator(
         onRefresh: () async {
-          await controller.refreshCatalogActivities();
+          await controller.refreshCatalogActivities(
+            district: _selectedDistrict,
+            interest: _selectedInterest,
+          );
           await controller.refreshCatalogInterests(silent: true);
+          if (controller.isElder) {
+            await controller.refreshCatalogRecommendations(silent: true);
+          }
         },
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
@@ -4100,7 +4618,14 @@ class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
                               : d.$2),
                     )),
               ],
-              onChanged: (value) => setState(() => _selectedDistrict = value),
+              onChanged: (value) {
+                setState(() => _selectedDistrict = value);
+                controller.refreshCatalogActivities(
+                  silent: true,
+                  district: _selectedDistrict,
+                  interest: _selectedInterest,
+                );
+              },
             ),
             const SizedBox(height: 12),
 
@@ -4121,8 +4646,14 @@ class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
                 return FilterChip(
                   label: Text(tr(context, tag.$1, tag.$2)),
                   selected: selected,
-                  onSelected: (value) =>
-                      setState(() => _selectedInterest = value ? tag.$1 : null),
+                  onSelected: (value) {
+                    setState(() => _selectedInterest = value ? tag.$1 : null);
+                    controller.refreshCatalogActivities(
+                      silent: true,
+                      district: _selectedDistrict,
+                      interest: _selectedInterest,
+                    );
+                  },
                 );
               }).toList(),
             ),
@@ -4131,7 +4662,7 @@ class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
             // Recommendations section (elder only)
             if (controller.isElder &&
                 controller.catalogRecommendations.isNotEmpty) ...[
-              SectionTitle(title: tr(context, '為你推薦', 'For you')),
+              SectionTitle(title: tr(context, '為你推薦', 'Activity suggestions')),
               const SizedBox(height: 9),
               ...controller.catalogRecommendations
                   .take(3)
@@ -4200,122 +4731,125 @@ class _ActivityCatalogScreenState extends ConsumerState<ActivityCatalogScreen> {
 }
 
 class CatalogActivityCard extends StatelessWidget {
-  const CatalogActivityCard({
-    required this.activity,
-    required this.isInterested,
-    this.onInterest,
-    super.key,
-  });
-
+  const CatalogActivityCard(
+      {required this.activity,
+      required this.isInterested,
+      this.onInterest,
+      super.key});
   final CatalogActivity activity;
   final bool isInterested;
   final Future<bool> Function()? onInterest;
 
+  String _availabilityText(BuildContext context) {
+    switch (activity.availabilityStatus) {
+      case 'current':
+        return tr(context, '活動資料仍有效；參加前請向主辦機構核實。',
+            'Activity information current; verify with the organizer before attending.');
+      case 'date_unknown':
+        return tr(context, '活動日期不詳；參加前請向主辦機構核實。',
+            'Activity dates unknown; verify with the organizer before attending.');
+      case 'expired':
+        return tr(context, '活動已過期；只保留興趣記錄。',
+            'Activity expired; retained as interest history only.');
+      case 'invalid_date':
+        return tr(
+            context, '活動日期無效；暫時無法參加。', 'Activity dates invalid; unavailable.');
+      case 'unverified':
+        return tr(context, '活動資料未經核實。', 'Activity details unverified.');
+      default:
+        return tr(context, '活動暫時無法參加。', 'Activity unavailable.');
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(17, 16, 17, 15),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+  Widget build(BuildContext context) => Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(17, 16, 17, 15),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (!activity.verified)
-              Text(tr(context, '示例活動 · 詳情未核實',
-                  'Example activity · details unverified')),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(activity.title,
-                      style: Theme.of(context).textTheme.titleMedium),
-                ),
-                if (activity.contributionType != null)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDDEDEA),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      activity.contributionType == 'contribute'
-                          ? tr(context, '貢獻', 'Contribute')
-                          : tr(context, '參與', 'Participate'),
-                      style: const TextStyle(
-                          fontSize: 13,
-                          color: Color(0xFF116466),
-                          fontWeight: FontWeight.w700),
-                    ),
-                  ),
-              ],
-            ),
-            if (activity.organizer != null &&
-                activity.organizer!.isNotEmpty) ...[
+              Text(tr(context, '示範活動 — 詳情未經核實',
+                  'Example activity — details unverified')),
+            Text(activity.title,
+                style: Theme.of(context).textTheme.titleMedium),
+            if (activity.contributionType != null)
+              Chip(
+                  label: Text(activity.contributionType == 'contribute'
+                      ? tr(context, '貢獻', 'Contribute')
+                      : tr(context, '參與', 'Participate'))),
+            if (activity.organizer?.isNotEmpty == true) ...[
               const SizedBox(height: 6),
-              Text(activity.organizer!,
-                  style: Theme.of(context).textTheme.bodyMedium),
+              Text(activity.organizer!),
             ],
             const SizedBox(height: 8),
             Text(activity.description),
-            if (activity.district != null && activity.district!.isNotEmpty) ...[
+            if (activity.district?.isNotEmpty == true) ...[
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(Icons.place_outlined,
-                      size: 18, color: Color(0xFF526663)),
-                  const SizedBox(width: 4),
-                  Text(activity.district!,
-                      style: const TextStyle(
-                          fontSize: 15, color: Color(0xFF526663))),
-                ],
-              ),
+              Row(children: [
+                const Icon(Icons.place_outlined, size: 18),
+                const SizedBox(width: 4),
+                Expanded(child: Text(activity.district!))
+              ]),
             ],
-            if (activity.scheduleNote != null &&
-                activity.scheduleNote!.isNotEmpty) ...[
+            if (activity.scheduleNote?.isNotEmpty == true) ...[
               const SizedBox(height: 6),
-              Row(
-                children: [
-                  Icon(Icons.schedule_outlined,
-                      size: 18, color: Color(0xFF526663)),
-                  const SizedBox(width: 4),
-                  Expanded(
-                      child: Text(activity.scheduleNote!,
-                          style: const TextStyle(
-                              fontSize: 15, color: Color(0xFF526663)))),
-                ],
-              ),
+              Row(children: [
+                const Icon(Icons.schedule_outlined, size: 18),
+                const SizedBox(width: 4),
+                Expanded(child: Text(activity.scheduleNote!))
+              ]),
             ],
-            if (activity.mobilityNote != null &&
-                activity.mobilityNote!.isNotEmpty) ...[
+            if (activity.mobilityNote?.isNotEmpty == true) ...[
               const SizedBox(height: 6),
-              Row(
-                children: [
-                  Icon(Icons.accessible_outlined,
-                      size: 18, color: Color(0xFF526663)),
-                  const SizedBox(width: 4),
-                  Expanded(
-                      child: Text(activity.mobilityNote!,
-                          style: const TextStyle(
-                              fontSize: 15, color: Color(0xFF526663)))),
-                ],
-              ),
+              Row(children: [
+                const Icon(Icons.accessible_outlined, size: 18),
+                const SizedBox(width: 4),
+                Expanded(child: Text(activity.mobilityNote!))
+              ]),
             ],
             if (activity.interestTags.isNotEmpty) ...[
               const SizedBox(height: 10),
               Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: activity.interestTags
-                    .map((tag) => Chip(
-                          label:
-                              Text(tag, style: const TextStyle(fontSize: 13)),
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                        ))
-                    .toList(),
-              ),
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: activity.interestTags
+                      .map((tag) => Chip(
+                          label: Text(tag),
+                          visualDensity: VisualDensity.compact))
+                      .toList()),
             ],
-            if (activity.url != null && activity.url!.isNotEmpty) ...[
+            if (activity.availabilityStatus != null || !activity.available) ...[
+              const SizedBox(height: 10),
+              Text(_availabilityText(context)),
+            ],
+            if (activity.verifiedAt != null) ...[
+              const SizedBox(height: 6),
+              Text('${tr(context, '最後核實日期', 'Last checked')}: '
+                  '${activity.verifiedAt!.year}-${activity.verifiedAt!.month.toString().padLeft(2, '0')}-${activity.verifiedAt!.day.toString().padLeft(2, '0')}'),
+            ],
+            if (activity.recommendationBasis == 'general') ...[
+              const SizedBox(height: 10),
+              Text(tr(context, '一般建議', 'General suggestion')),
+              Text(tr(context, '非個人化建議，仍可能包含你不喜歡的活動。',
+                  'Not personalized. These suggestions may include activities you dislike.')),
+            ],
+            if (activity.recommendationBasis == 'memory')
+              Padding(padding: const EdgeInsets.only(top: 10), child: Text(tr(context,
+                  '僅表示技能相關，不代表喜歡或願意參加。',
+                  'Skill-related match; this does not imply liking or willingness to participate.'))),
+            if (activity.recommendationBasis == 'memory')
+              ...activity.recommendationReasons.map((reason) => Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(
+                        '${reason.sourceType == 'skill' ? tr(context, '已確認的技能：', 'Confirmed skill: ') : tr(context, '已儲存的喜好：', 'Saved preference: ')}${reason.sourceText}\n'
+                        '${tr(context, '配對主題：', 'Matched topic: ')}${reason.matchedTag}'),
+                  )),
+            if (activity.url?.isNotEmpty == true) ...[
+              const SizedBox(height: 6),
+              Text('${tr(context, '資料來源', 'Source')}: ${activity.url}'),
+            ],
+            if (activity.available && activity.url?.isNotEmpty == true) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: () async {
@@ -4325,7 +4859,7 @@ class CatalogActivityCard extends StatelessWidget {
                           mode: LaunchMode.externalApplication)) {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(tr(context, '暫時未能開啟來源連結。',
+                          content: Text(tr(context, '暫時無法開啟資料來源連結。',
                               'Unable to open the source link right now.'))));
                     }
                   }
@@ -4337,22 +4871,21 @@ class CatalogActivityCard extends StatelessWidget {
             if (onInterest != null) ...[
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
-                onPressed: onInterest,
+                onPressed:
+                    isInterested || activity.available ? onInterest : null,
                 icon: Icon(isInterested
                     ? Icons.check_circle_rounded
                     : Icons.favorite_border_rounded),
                 label: Text(isInterested
-                    ? tr(context, '已表示感興趣', 'Interested')
-                    : tr(context, '表示感興趣', 'Express interest')),
+                    ? tr(context, '撤回興趣', 'Withdraw interest')
+                    : tr(context, '表示有興趣', 'Express interest')),
                 style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(48)),
               ),
             ],
-          ],
+          ]),
         ),
-      ),
-    );
-  }
+      );
 }
 
 // ---------------------------------------------------------------------------

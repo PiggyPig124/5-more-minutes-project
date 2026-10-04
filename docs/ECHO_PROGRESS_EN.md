@@ -1,5 +1,7 @@
 # Echo Progress Report
 
+**Current product decision:** ordinary preference auto-save after Memory opt-in is user-confirmed; separate team review is still unverified. Manual drafts and sensitive/uncertain/non-preference suggestions retain item-level Save. [Current policy and exact SRS gaps](SRS_APPLICABILITY_MEM_AUTO_PREFERENCE.md). Earlier dated results below are historical snapshots.
+
 **Update as of 30 September 2026.** Model-maintained Memory is implemented locally behind an explicit opt-in and configured text-model requirement. The model proposes structured save, suggest, correct, and forget actions; the server validates current-message evidence, ownership, current memory versions, and a bounded sensitive-content veto before writing. Demo mode never auto-saves. Memory retrieval still uses labelled keyword matching unless an embedding provider is configured; live model and embedding quality have not been tested. The default application no longer fetches either unapproved Community source. Backend tests: **48 passed**; the synthetic phase-one HTTP/restart acceptance: **34 checks passed**. Flutter tests and analysis were not rerun in this environment after these changes. Human-only realtime group chat is tracked separately in [PR #1](https://github.com/PiggyPig124/5-more-minutes-project/pull/1).
 
 The following sections retain the **28 September historical snapshot** and its earlier verification figures. They should not be read as the current implementation status where they differ from the update above. Original reference documents supplied for review remain outside this report's intended publication scope.
@@ -22,7 +24,7 @@ The 20 September commit already had older-adult and caregiver accounts, private 
 | --- | --- | --- |
 | Guest entry | Session-only guest conversations and public Help search | A visitor can ask a question without registration; the guest transcript does not become account history or long-term memory. Sessions expire after 30 minutes of inactivity and can be ended explicitly. |
 | Memory consent | An explicit opt-in, disabled by default for new and existing older-adult accounts | Turning memory off stops new collection, recall, and skill discovery while leaving saved memories available to their owner for review and deletion. |
-| Save flow | A transient suggestion in a new chat reply and an explicit Save endpoint | A new chat suggestion is not added to the Memory Library until the older adult selects Save. Legacy candidate and correction flows still need to be made consistent with this rule. |
+| Save flow | Ordinary preference auto-save after Memory opt-in; manual Save for other suggestions | Eligible ordinary preferences do not need a Save for each item. Manual draft edits stay in RAM until Save; sensitive, uncertain and non-preference suggestions require item-level confirmation. See the current SRS applicability note for legacy candidate/correction gaps. |
 | Community skills | Private skill suggestions derived from active, confirmed memories, with confirm, edit, and reject actions | An unconfirmed skill is not shared or used for opportunity matching. The extraction currently uses a limited phrase map rather than a validated model. |
 | Client navigation | The revised five-destination older-adult interface, guest entry, memory setting, and Community screens | The new privacy and community flows can be reached from the Flutter client. |
 | Public community search | A bounded implementation that read two selected public pages and displayed source, event date, cache, and outage states | Technical retrieval was demonstrated, but the source-rights review below blocks treating this as an approved production feed. |
@@ -44,7 +46,7 @@ This is an **account-based prototype**, not a verified matching service or publi
 
 ## Next work without speech or community feeds
 
-1. **Finish memory control.** Make the legacy candidate and correction paths obey the same confirm-before-save rule; add Delete All and verify withdrawal from recall, skills, sharing, and derived content. Complete the difference between turning memory off and deleting it.
+1. **Close remaining Memory scope.** Ordinary preference auto-save after opt-in is the user-confirmed product policy. Four controls and linked withdrawal are implemented locally; align legacy persisted candidate/correction paths with the manual-item boundary and complete separate team review and real-provider evaluation. See [current SRS applicability](SRS_APPLICABILITY_MEM_AUTO_PREFERENCE.md).
 2. **Create a private Memory Card.** Build a card only from confirmed memory, show exactly what will be shared and with whom, require event-specific approval, and test revocation of access.
 3. **Deliver a portable sourced Answer Card.** Preserve the plain-language answer, official term, source, retrieval date, verification state, and next step when saving, printing, or sharing a single card. Complete the transport, healthcare-navigation, scam-guidance, and human-help routes without claiming to perform the official service itself.
 4. **Complete family controls.** Add reject and block actions for connections, and a confirmed plan or accompaniment request with a caregiver reply. Do not expose private chat or the full memory library.
@@ -56,3 +58,10 @@ Public memory maps, open help requests, proactive daily greetings, push delivery
 ## Git status at the time of writing
 
 The guest, memory, and community-search changes described above are in a separate working tree and have not been included in the group-chat branch. Original reference documents supplied for review are also outside this branch. The group implementation and this report are the only new scope prepared for this push.
+
+
+## Local increment verified on 2026-10-03
+
+The local feature branch now implements the four separate memory controls and private Memory Card creation/editing from confirmed sources. Drafts stay in RAM until explicit Save; editing preserves card/source IDs and atomically withdraws the old in-app shared body. A new share requires a fresh recipient and full-content confirmation. English/Traditional Chinese creation, editing and sharing widgets passed at 320px with 2x text.
+
+Full checks passed: backend322, Flutter312, five opt-in HTTP contracts, analysis and independent review. See the [implementation evidence](superpowers/specs/2026-10-03-private-memory-card-design.md), including the observed SQLite parallel-confirmation limitation and serial HTTP verification. The older candidate/automatic-preference confirmation exception remains Pending. Media, Answer Cards, public publishing and real-device/user evaluation remain separate work. This is uncommitted local code; no production data operation or deployment occurred.

@@ -1,4 +1,5 @@
 """Verify confirmed-memory persistence and lasting withdrawal across processes."""
+from memory_revision_helpers import http_memory_revision_headers
 from pathlib import Path
 import secrets
 import tempfile
@@ -30,12 +31,12 @@ def main():
             })
             check(registered.status == 201, 'fixture account created')
             api.token = registered.body['access_token']
-            check(api.request('PUT', '/memories/consent', {'enabled': True}).status == 200, 'fixture explicitly enables memory')
-            created = api.post('/memories', {'content': '我以前在大澳教書', 'kind': 'experience'})
+            check(api.request('PUT', '/memories/consent', {'enabled': True}, headers=http_memory_revision_headers(api)).status == 200, 'fixture explicitly enables memory')
+            created = api.post('/memories', {'content': '我以前在大澳教書', 'kind': 'experience'}, headers=http_memory_revision_headers(api))
             check(created.status == 201, 'memory candidate persisted')
             memory_id = created.body['id']
-            check(api.post(f'/memories/{memory_id}/confirm').status == 200, 'memory confirmed')
-            story = api.post('/stories', {'title': '教學生涯', 'content': '我以前在大澳教書', 'memory_ids': [memory_id]})
+            check(api.post(f'/memories/{memory_id}/confirm', headers=http_memory_revision_headers(api)).status == 200, 'memory confirmed')
+            story = api.post('/stories', {'title': '教學生涯', 'content': '我以前在大澳教書', 'memory_ids': [memory_id]}, headers=http_memory_revision_headers(api))
             check(story.status == 201, 'derived story persisted')
         finally:
             _stop_server(process)
@@ -49,7 +50,7 @@ def main():
             conversation = api.post('/conversations', {})
             recalled = api.post(f"/conversations/{conversation.body['id']}/messages", {'content': '大澳教書'})
             check(recalled.status == 200 and bool(recalled.body['assistant_message']['metadata_json']['memory_sources']), 'new conversation retrieves restarted memory')
-            check(api.delete(f'/memories/{memory_id}').status == 204, 'memory withdrawal succeeds')
+            check(api.delete(f'/memories/{memory_id}', headers=http_memory_revision_headers(api, idempotency_key='interim_restart_acceptance-52-delete')).status == 204, 'memory withdrawal succeeds')
         finally:
             _stop_server(process)
         process = _start_server(path, secret, port)

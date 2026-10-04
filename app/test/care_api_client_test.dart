@@ -230,12 +230,16 @@ void main() {
       await api.sendSupportRequest(
           emergencyContactId: 'contact-1',
           message: 'Please call me',
+          familyLinkId: 'captured-link',
+          expectedAuthorizationEpoch: 3,
           idempotencyKey: 'stable-support-id',
           safetyEventId: eventId);
       expect(bodies.last, {
         'emergency_contact_id': 'contact-1',
         'message': 'Please call me',
         'idempotency_key': 'stable-support-id',
+        'family_link_id': 'captured-link',
+        'expected_authorization_epoch': 3,
         'safety_event_id': eventId,
       });
     }
@@ -249,6 +253,8 @@ void main() {
       api.sendSupportRequest(
           emergencyContactId: 'contact-1',
           message: 'Please call me',
+          familyLinkId: 'captured-link',
+          expectedAuthorizationEpoch: 3,
           idempotencyKey: 'retry-1'),
       throwsA(isA<ApiException>()
           .having((error) => error.statusCode, 'status', 403)),

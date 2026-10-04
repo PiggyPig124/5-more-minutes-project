@@ -21,7 +21,14 @@ void main() {
         return response.future;
       }
       if (request.url.path == '/memories/consent') {
-        return http.Response(jsonEncode({'enabled': false}), 200);
+        expect(request.headers['X-Memory-Revision'], '0');
+        return http.Response(
+            jsonEncode({
+              'enabled': false,
+              'revision': 1,
+              'counts': {'total': 0, 'current': 0}
+            }),
+            200);
       }
       throw StateError('Unexpected route');
     }));
@@ -34,7 +41,9 @@ void main() {
                   displayName: 'Senior',
                   email: 'elder@example.com',
                   role: UserRole.elder))
-          ..memoryConsentEnabled = true;
+          ..memoryConsentEnabled = true
+          ..memoryControlState = const MemoryControlState(
+              enabled: true, revision: 0, counts: {'total': 0, 'current': 0});
     final pending = controller.refreshCatalogRecommendations(silent: true);
     await started.future;
     expect(await controller.setMemoryConsent(false), isTrue);

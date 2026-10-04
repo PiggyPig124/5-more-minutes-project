@@ -1,5 +1,6 @@
 """Independent HTTP acceptance against disposable processes and a synthetic DB."""
 from __future__ import annotations
+from memory_revision_helpers import http_memory_revision_headers
 
 import secrets
 import sqlite3
@@ -21,8 +22,8 @@ def main() -> None:
         passed += 1
         print("PASS", label)
 
-    def call(client: APIClient, method: str, path: str, body=None, status=200):
-        response = client.request(method, path, body)
+    def call(client: APIClient, method: str, path: str, body=None, status=200, *, headers=None):
+        response = client.request(method, path, body, headers=headers)
         check(response.status == status, f"{method} {path} returns {status}: {response.body if response.status != status else ''}")
         return response.body
 
@@ -44,19 +45,19 @@ def main() -> None:
                 auth = call(client, "POST", "/auth/register", {"email": f"{role}@example.invalid", "password": "Synthetic-acceptance-2026!", "display_name": f"Synthetic {role}", "role": role}, 201)
                 client.token = auth["access_token"]
             check(call(elder, "GET", "/memories/consent")["enabled"] is False, "new elder memory defaults off")
-            call(elder, "POST", "/memories/save", {"content": "I worked as a tailor for forty years.", "kind": "experience"}, 403)
-            call(caregiver, "PUT", "/memories/consent", {"enabled": True}, 403)
-            call(elder, "PUT", "/memories/consent", {"enabled": True})
-            memory = call(elder, "POST", "/memories/save", {"content": "I worked as a tailor for forty years.", "kind": "experience"}, 201)
+            call(elder, "POST", "/memories/save", {"content": "I worked as a tailor for forty years.", "kind": "experience"}, 403, headers=http_memory_revision_headers(elder))
+            call(caregiver, "PUT", "/memories/consent", {"enabled": True}, 403, headers={'X-Memory-Revision': '0'})
+            call(elder, "PUT", "/memories/consent", {"enabled": True}, headers=http_memory_revision_headers(elder))
+            memory = call(elder, "POST", "/memories/save", {"content": "I worked as a tailor for forty years.", "kind": "experience"}, 201, headers=http_memory_revision_headers(elder))
             check(memory["status"] == "confirmed", "explicit Save creates confirmed memory")
-            skills = call(elder, "GET", "/community/skills/suggestions")["items"]
+            skills = call(elder, "GET", "/community/skills/suggestions", headers=http_memory_revision_headers(elder))["items"]
             check(len(skills) == 1 and skills[0]["memory_id"] == memory["id"] and skills[0]["status"] == "suggested", "confirmed source yields private unconfirmed skill")
             skill = skills[0]
-            call(caregiver, "GET", "/community/skills/suggestions", status=403)
-            call(elder, "POST", f"/community/skills/{skill['id']}/decision", {"decision": "confirm"})
-            call(elder, "PUT", "/memories/consent", {"enabled": False})
+            call(caregiver, "GET", "/community/skills/suggestions", status=403, headers={'X-Memory-Revision': '0'})
+            call(elder, "POST", f"/community/skills/{skill['id']}/decision", {"decision": "confirm"}, headers=http_memory_revision_headers(elder))
+            call(elder, "PUT", "/memories/consent", {"enabled": False}, headers=http_memory_revision_headers(elder))
             check(any(row["id"] == memory["id"] for row in call(elder, "GET", "/memories")), "turning memory off preserves owner review")
-            call(elder, "GET", "/community/skills/suggestions", status=403)
+            call(elder, "GET", "/community/skills/suggestions", status=403, headers=http_memory_revision_headers(elder))
             call(guest, "DELETE", f"/guest/sessions/{session['session_id']}", status=204)
             call(guest, "POST", f"/guest/sessions/{session['session_id']}/messages", {"content": "hello"}, 404)
             restart_session = call(guest, "POST", "/guest/sessions", status=201)
@@ -67,9 +68,9 @@ def main() -> None:
             check(_wait_for_health(origin, process), "second process healthy")
             check(call(elder, "GET", "/memories/consent")["enabled"] is False, "disabled consent survives process restart")
             call(guest, "POST", f"/guest/sessions/{restart_session['session_id']}/messages", {"content": "hello"}, 404)
-            call(elder, "DELETE", f"/memories/{memory['id']}", status=204)
-            call(elder, "PUT", "/memories/consent", {"enabled": True})
-            check(call(elder, "GET", "/community/skills/suggestions")["items"] == [], "deleted source is absent from skill discovery")
+            call(elder, "DELETE", f"/memories/{memory['id']}", status=204, headers=http_memory_revision_headers(elder, idempotency_key='echo_mvp_phase1_acceptance-70-delete'))
+            call(elder, "PUT", "/memories/consent", {"enabled": True}, headers=http_memory_revision_headers(elder))
+            check(call(elder, "GET", "/community/skills/suggestions", headers=http_memory_revision_headers(elder))["items"] == [], "deleted source is absent from skill discovery")
         finally:
             _stop_server(process)
     print(f"\nEcho phase 1 acceptance: {passed} passed, 0 failed")

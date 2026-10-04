@@ -61,7 +61,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Ink class'), findsOneWidget);
     expect(find.text('Cooking class'), findsNothing);
-    expect(find.text('Example activity · details unverified'), findsOneWidget);
+    expect(find.text('Example activity — details unverified'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

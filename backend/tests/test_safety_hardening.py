@@ -16,6 +16,7 @@ from app.memory_models import PersonalMemory
 from app.memory_service import purge_memory
 from app.models import Conversation, Message
 from app.safety_models import EmergencyContact, SafetyEvent
+from .test_family_messages import message_preview
 from .test_safety_checkin_speech import _create_family_link, _headers, _register, _settings
 
 
@@ -97,9 +98,9 @@ def _event(app, owner_id):
         return event.id, message.id, conversation.id
 
 
-def _request(contact, **changes):
+def _request(contact, link, **changes):
     payload = {"emergency_contact_id": contact["id"], "message": "Please call me",
-               "idempotency_key": "stable-client-key"}
+               "idempotency_key": "stable-client-key", **message_preview(link)}
     payload.update(changes)
     return payload
 
@@ -161,28 +162,28 @@ def test_contact_uniqueness_enforced_in_database_and_datetime_values(setup):
 @pytest.mark.parametrize("changes", [{"message": " \n\t"}, {"idempotency_key": " "},
                                       {"idempotency_key": None}, {"idempotency_key": ""}])
 def test_nonblank_message_and_stable_key_required(setup, changes):
-    _, client, elder, _, _, _, contacts = setup
+    _, client, elder, _, _, links, contacts = setup
     assert client.post("/safety/support-request", headers=_headers(elder),
-                       json=_request(contacts[0], **changes)).status_code == 422
+                       json=_request(contacts[0], links[0], **changes)).status_code == 422
 
 
 def test_missing_key_rejected(setup):
-    _, client, elder, _, _, _, contacts = setup
-    payload = _request(contacts[0])
+    _, client, elder, _, _, links, contacts = setup
+    payload = _request(contacts[0], links[0])
     payload.pop("idempotency_key")
     assert client.post("/safety/support-request", headers=_headers(elder), json=payload).status_code == 422
 
 
 def test_idempotency_binds_content_recipient_and_event(setup):
-    app, client, elder, _, _, _, contacts = setup
+    app, client, elder, _, _, links, contacts = setup
     event_id, _, _ = _event(app, elder["account"]["id"])
     second_event, _, _ = _event(app, elder["account"]["id"])
-    payload = _request(contacts[0], safety_event_id=event_id)
+    payload = _request(contacts[0], links[0], safety_event_id=event_id)
     first = client.post("/safety/support-request", headers=_headers(elder), json=payload)
     assert first.status_code == 200, first.text
     repeat = client.post("/safety/support-request", headers=_headers(elder), json=payload)
     assert repeat.json() == first.json()
-    for changes in ({"message": "Changed"}, {"emergency_contact_id": contacts[1]["id"]},
+    for changes in ({"message": "Changed"}, {"emergency_contact_id": contacts[1]["id"], **message_preview(links[1])},
                     {"safety_event_id": second_event}, {"safety_event_id": None}):
         assert client.post("/safety/support-request", headers=_headers(elder),
                            json={**payload, **changes}).status_code == 409
@@ -195,30 +196,30 @@ def test_idempotency_binds_content_recipient_and_event(setup):
 
 
 def test_safety_key_is_separate_from_ordinary_message_key(setup):
-    _, client, elder, _, carers, _, contacts = setup
+    _, client, elder, _, carers, links, contacts = setup
     normal = client.post("/family-messages", headers=_headers(elder), json={
         "recipient_id": carers[0]["account"]["id"], "content": "Ordinary message",
-        "client_message_id": "stable-client-key",
+        "client_message_id": "stable-client-key", **message_preview(links[0]),
     })
     assert normal.status_code == 201
-    safety = client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0]))
+    safety = client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0], links[0]))
     assert safety.status_code == 200
     assert safety.json()["family_message_id"] != normal.json()["id"]
 
 
 @pytest.mark.parametrize("foreign", [False, True])
 def test_event_must_exist_and_belong_to_owner(setup, foreign):
-    app, client, elder, other, carers, _, contacts = setup
+    app, client, elder, other, carers, links, contacts = setup
     event_id = _event(app, other["account"]["id"])[0] if foreign else "missing"
     response = client.post("/safety/support-request", headers=_headers(elder),
-                           json=_request(contacts[0], safety_event_id=event_id))
+                           json=_request(contacts[0], links[0], safety_event_id=event_id))
     assert response.status_code == 404
     assert client.get("/family-messages", headers=_headers(carers[0])).json() == []
 
 
 def test_revocation_denies_new_sends_and_replays(setup):
     _, client, elder, _, _, links, contacts = setup
-    payload = _request(contacts[0])
+    payload = _request(contacts[0], links[0])
     assert client.post("/safety/support-request", headers=_headers(elder), json=payload).status_code == 200
     assert client.delete(f"/family-links/{links[0]['id']}", headers=_headers(elder)).status_code == 200
     assert client.post("/safety/support-request", headers=_headers(elder), json=payload).status_code == 403
@@ -227,9 +228,9 @@ def test_revocation_denies_new_sends_and_replays(setup):
 
 
 def test_concurrent_retries_send_once(setup):
-    app, client, elder, _, _, _, contacts = setup
+    app, client, elder, _, _, links, contacts = setup
     def send():
-        return client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0]))
+        return client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0], links[0]))
     with ThreadPoolExecutor(max_workers=4) as pool:
         responses = list(pool.map(lambda _: send(), range(4)))
     assert [response.status_code for response in responses] == [200] * 4
@@ -254,7 +255,7 @@ def test_send_and_revoke_serialize_at_database_lock(setup, revoke_first):
 
     sa_event.listen(app.state.engine, "before_cursor_execute", hold_writer)
     def send():
-        return client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0]))
+        return client.post("/safety/support-request", headers=_headers(elder), json=_request(contacts[0], links[0]))
     def revoke():
         return client.delete(f"/family-links/{links[0]['id']}", headers=_headers(elder))
     try:

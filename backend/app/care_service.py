@@ -9,7 +9,9 @@ from .care_models import CareNotification, CarePreference
 from .collaboration_models import FamilyMessage
 from .models import Account, Conversation, FamilyLink, Message, Task
 from .schemas import CheckInScheduleCreate
-from .dependencies import active_care_link, linked_elder_ids
+from .task_share_models import TaskShare
+from .task_share_service import active_share, account_owner_ids, begin_guard
+from .family_connection_service import pair_is_blocked
 
 HK = ZoneInfo('Asia/Hong_Kong')
 
@@ -39,11 +41,16 @@ def visible(db: Session, item: CareNotification) -> bool:
         message = db.get(FamilyMessage, item.source_id)
         link = db.get(FamilyLink, message.link_id) if message else None
         return bool(message and message.recipient_id == item.owner_id and link
-                    and link.status == 'active' and 'family_messages' in link.scopes)
+                    and link.status == 'active' and 'family_messages' in link.scopes
+                    and message.access_revoked_at is None and message.link_epoch == link.authorization_epoch
+                    and not pair_is_blocked(db, link.elder_id, link.caregiver_id))
     if item.kind == 'task_reminder':
         task = db.get(Task, item.source_id)
-        return bool(task and (task.owner_id == item.owner_id or active_care_link(db, item.owner_id, task.owner_id))
-                    and task.status in ('pending', 'in_progress'))
+        return bool(task and task.owner_id == item.owner_id and task.status in ('pending', 'in_progress'))
+    if item.kind == 'shared_task_reminder':
+        share = db.get(TaskShare, item.source_id)
+        task = db.get(Task, share.task_id) if share else None
+        return bool(task and task.status in ('pending', 'in_progress') and active_share(db, share, item.owner_id))
     return True
 
 
@@ -57,6 +64,10 @@ def add_notification(db: Session, owner_id: str, kind: str, source_id: str, body
 
 
 def collect_notifications(db: Session, account: Account, now: datetime | None = None) -> None:
+    account_id = account.id
+    owners = account_owner_ids(db, account_id)
+    begin_guard(db, owners)
+    account = db.get(Account, account_id)
     now = now or datetime.now(timezone.utc)
     pref = db.get(CarePreference, account.id)
     if not pref:
@@ -65,11 +76,18 @@ def collect_notifications(db: Session, account: Account, now: datetime | None = 
     if quiet_or_paused(settings, now):
         return
     if settings.task_reminders:
-        owners = {account.id} | (linked_elder_ids(db, account.id) if account.role == 'caregiver' else set())
-        tasks = db.scalars(select(Task).where(Task.owner_id.in_(owners),
+        tasks = db.scalars(select(Task).where(Task.owner_id == account.id,
             Task.status.in_(['pending', 'in_progress']), Task.due_at <= now)).all()
         for task in tasks:
-            add_notification(db, account.id, 'task_reminder', task.id, '有一項照顧事項已到期，請查看待辦事項。')
+            add_notification(db, account.id, 'task_reminder', task.id, '有一項待辦提醒到期，請查看待辦事項。')
+        if account.role == 'caregiver':
+            shares = db.scalars(select(TaskShare).join(FamilyLink, TaskShare.family_link_id == FamilyLink.id)
+                .where(FamilyLink.caregiver_id == account.id, TaskShare.revoked_at.is_(None))).all()
+            for share in shares:
+                task = db.get(Task, share.task_id)
+                if (active_share(db, share, account.id) and task.status in ('pending', 'in_progress')
+                        and task.due_at is not None and aware(task.due_at) <= now):
+                    add_notification(db, account.id, 'shared_task_reminder', share.id, '有一項已分享待辦到期，請查看。')
     if settings.family_replies:
         messages = db.scalars(select(FamilyMessage).where(FamilyMessage.recipient_id == account.id,
             FamilyMessage.created_at >= pref.created_at)).all()

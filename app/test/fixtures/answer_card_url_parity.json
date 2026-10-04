@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {
+      "id": "edge-00",
+      "url": "https://www.ha.org.hk:0/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-01",
+      "url": "https://www.ha.org.hk:/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-02",
+      "url": "https://@www.ha.org.hk/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-03",
+      "url": "https://:@www.ha.org.hk/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-04",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp#",
+      "allowed": false
+    },
+    {
+      "id": "edge-05",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp?",
+      "allowed": false
+    },
+    {
+      "id": "edge-06",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp?Content_ID=100826#",
+      "allowed": false
+    },
+    {
+      "id": "edge-07",
+      "url": "https://portal.csdi.gov.hk/csdi-webpage/?datasetId=swd_rcd_1696994103126_1549#",
+      "allowed": false
+    },
+    {
+      "id": "edge-08",
+      "url": "https://www.ha.org.hk:443/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-09",
+      "url": "https://www.ha.org.hk:invalid/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-10",
+      "url": "https://synthetic@www.ha.org.hk/visitors/ha_visitor_guide.asp",
+      "allowed": false
+    },
+    {
+      "id": "edge-11",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp?token=synthetic",
+      "allowed": false
+    },
+    {
+      "id": "edge-12",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp#synthetic",
+      "allowed": false
+    },
+    {
+      "id": "edge-13",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp?Content_ID=100826&token=synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-portal.csdi.gov.hk",
+      "url": "https://portal.csdi.gov.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.cheu.gov.hk",
+      "url": "https://www.cheu.gov.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.elderly.gov.hk",
+      "url": "https://www.elderly.gov.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.ha.org.hk",
+      "url": "https://www.ha.org.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.hkab.org.hk",
+      "url": "https://www.hkab.org.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.mtr.com.hk",
+      "url": "https://www.mtr.com.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.swd.gov.hk",
+      "url": "https://www.swd.gov.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "zero_port-www.td.gov.hk",
+      "url": "https://www.td.gov.hk:0/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-portal.csdi.gov.hk",
+      "url": "https://portal.csdi.gov.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.cheu.gov.hk",
+      "url": "https://www.cheu.gov.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.elderly.gov.hk",
+      "url": "https://www.elderly.gov.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.ha.org.hk",
+      "url": "https://www.ha.org.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.hkab.org.hk",
+      "url": "https://www.hkab.org.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.mtr.com.hk",
+      "url": "https://www.mtr.com.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.swd.gov.hk",
+      "url": "https://www.swd.gov.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_port-www.td.gov.hk",
+      "url": "https://www.td.gov.hk:/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-portal.csdi.gov.hk",
+      "url": "https://@portal.csdi.gov.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.cheu.gov.hk",
+      "url": "https://@www.cheu.gov.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.elderly.gov.hk",
+      "url": "https://@www.elderly.gov.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.ha.org.hk",
+      "url": "https://@www.ha.org.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.hkab.org.hk",
+      "url": "https://@www.hkab.org.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.mtr.com.hk",
+      "url": "https://@www.mtr.com.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.swd.gov.hk",
+      "url": "https://@www.swd.gov.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_user-www.td.gov.hk",
+      "url": "https://@www.td.gov.hk/synthetic",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-portal.csdi.gov.hk",
+      "url": "https://portal.csdi.gov.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.cheu.gov.hk",
+      "url": "https://www.cheu.gov.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.elderly.gov.hk",
+      "url": "https://www.elderly.gov.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.ha.org.hk",
+      "url": "https://www.ha.org.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.hkab.org.hk",
+      "url": "https://www.hkab.org.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.mtr.com.hk",
+      "url": "https://www.mtr.com.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.swd.gov.hk",
+      "url": "https://www.swd.gov.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_fragment-www.td.gov.hk",
+      "url": "https://www.td.gov.hk/synthetic#",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-portal.csdi.gov.hk",
+      "url": "https://portal.csdi.gov.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.cheu.gov.hk",
+      "url": "https://www.cheu.gov.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.elderly.gov.hk",
+      "url": "https://www.elderly.gov.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.ha.org.hk",
+      "url": "https://www.ha.org.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.hkab.org.hk",
+      "url": "https://www.hkab.org.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.mtr.com.hk",
+      "url": "https://www.mtr.com.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.swd.gov.hk",
+      "url": "https://www.swd.gov.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "empty_query-www.td.gov.hk",
+      "url": "https://www.td.gov.hk/synthetic?",
+      "allowed": false
+    },
+    {
+      "id": "approved-base",
+      "url": "https://www.ha.org.hk/visitors/ha_visitor_guide.asp",
+      "allowed": true
+    }
+  ]
+}

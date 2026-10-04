@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .memory_revision_helpers import memory_revision_headers
 
 from pathlib import Path
 
@@ -19,7 +20,7 @@ def _settings(path: Path) -> Settings:
 
 def _enable_memory(client: TestClient, account: dict) -> dict[str, str]:
     headers = _headers(account)
-    response = client.put("/memories/consent", headers=headers, json={"enabled": True})
+    response = client.put("/memories/consent", headers=memory_revision_headers(client, headers), json={"enabled": True})
     assert response.status_code == 200, response.text
     return headers
 
@@ -199,10 +200,10 @@ def test_sensitive_mislabel_hallucinated_evidence_unknown_ids_and_curated_memory
         conversation_id = _conversation(client, headers)
 
         manual = client.post(
-            "/memories", headers=headers,
+            "/memories", headers=memory_revision_headers(client, headers),
             json={"content": "I enjoy classical music.", "kind": "preference"},
         ).json()
-        assert client.post(f"/memories/{manual['id']}/confirm", headers=headers).status_code == 200
+        assert client.post(f"/memories/{manual['id']}/confirm", headers=memory_revision_headers(client, headers)).status_code == 200
 
         model = MockMemoryModel([
             [_memory_action(
@@ -267,7 +268,7 @@ def test_sensitive_item_requires_owner_save_action(tmp_path: Path) -> None:
         assert suggestion["sensitivity"] == "sensitive"
         assert client.get("/memories", headers=headers).json() == []
 
-        saved = client.post("/memories/save", headers=headers, json={
+        saved = client.post("/memories/save", headers=memory_revision_headers(client, headers), json={
             "content": suggestion["content"],
             "kind": suggestion["kind"],
             "source_message_id": suggestion["source_message_id"],
@@ -285,10 +286,10 @@ def test_old_turn_cannot_authorize_model_forgetting_on_unrelated_turn(tmp_path: 
         headers = _enable_memory(client, elder)
         conversation_id = _conversation(client, headers)
         created = client.post(
-            "/memories", headers=headers,
+            "/memories", headers=memory_revision_headers(client, headers),
             json={"content": "I enjoy gardening.", "kind": "preference"},
         ).json()
-        assert client.post(f"/memories/{created['id']}/confirm", headers=headers).status_code == 200
+        assert client.post(f"/memories/{created['id']}/confirm", headers=memory_revision_headers(client, headers)).status_code == 200
         app.state.orchestrator = MockMemoryModel([
             [],
             [_memory_action(

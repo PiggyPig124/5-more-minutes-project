@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .memory_revision_helpers import memory_revision_headers
 
 import asyncio
 import json
@@ -42,7 +43,7 @@ def _register(client: TestClient, email: str, role: str = "elder", *, enable_mem
     if role == "elder" and enable_memory:
         consent = client.put(
             "/memories/consent",
-            headers=_headers(response.json()),
+            headers=memory_revision_headers(client, _headers(response.json())),
             json={"enabled": True},
         )
         assert consent.status_code == 200, consent.text
@@ -67,7 +68,7 @@ def test_candidates_confirmation_retrieval_and_private_isolation(tmp_path: Path)
 
         created = client.post(
             "/memories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"content": "My favourite tea is jasmine.", "kind": "preference"},
         )
         assert created.status_code == 201, created.text
@@ -77,7 +78,7 @@ def test_candidates_confirmation_retrieval_and_private_isolation(tmp_path: Path)
             "/memories/search", headers=_headers(elder), json={"query": "jasmine tea"}
         ).json()["items"] == []
 
-        confirmed = client.post(f"/memories/{memory['id']}/confirm", headers=_headers(elder))
+        confirmed = client.post(f"/memories/{memory['id']}/confirm", headers=memory_revision_headers(client, _headers(elder)))
         assert confirmed.status_code == 200
         search = client.post(
             "/memories/search", headers=_headers(elder), json={"query": "jasmine tea"}
@@ -107,20 +108,20 @@ def test_event_time_is_validated_and_preserved_across_correction(tmp_path: Path)
         headers = _headers(elder)
         created = client.post(
             "/memories",
-            headers=headers,
+            headers=memory_revision_headers(client, headers),
             json={"content": "Graduated from school", "event_time": "1988-06-01"},
         )
         assert created.status_code == 201, created.text
         assert created.json()["event_time"] == "1988-06-01"
         memory_id = created.json()["id"]
         invalid = client.patch(
-            f"/memories/{memory_id}", headers=headers, json={"event_time": "tomorrow"}
+            f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"event_time": "tomorrow"}
         )
         assert invalid.status_code == 422
-        assert client.patch(f"/memories/{memory_id}", headers=headers, json={"content": None}).status_code == 422
-        assert client.patch(f"/memories/{memory_id}", headers=headers, json={"kind": None}).status_code == 422
+        assert client.patch(f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"content": None}).status_code == 422
+        assert client.patch(f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"kind": None}).status_code == 422
         corrected = client.patch(
-            f"/memories/{memory_id}", headers=headers, json={"event_time": "1989-06-01T12:30:00+08:00"}
+            f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"event_time": "1989-06-01T12:30:00+08:00"}
         )
         assert corrected.status_code == 200, corrected.text
         assert corrected.json()["event_time"] == "1989-06-01T12:30:00+08:00"
@@ -173,7 +174,7 @@ def test_deletion_rebuilds_an_old_rolling_summary(tmp_path: Path) -> None:
             db.commit()
             memory_id = memory.id
 
-        assert client.delete(f"/memories/{memory_id}", headers=headers).status_code == 204
+        assert client.delete(f"/memories/{memory_id}", headers=memory_revision_headers(client, headers, idempotency_key='test_memories-176-delete')).status_code == 204
         detail = client.get(f"/conversations/{conversation_id}", headers=headers)
         assert detail.status_code == 200
         payload = detail.json()
@@ -194,7 +195,7 @@ def test_correction_suppression_and_deletion_propagate(tmp_path: Path) -> None:
         source_id = turn["user_message"]["id"]
         created = client.post(
             "/memories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={
                 "content": "I enjoy jasmine tea.",
                 "kind": "preference",
@@ -202,17 +203,17 @@ def test_correction_suppression_and_deletion_propagate(tmp_path: Path) -> None:
             },
         ).json()
         old_id = created["id"]
-        client.post(f"/memories/{old_id}/confirm", headers=_headers(elder))
+        client.post(f"/memories/{old_id}/confirm", headers=memory_revision_headers(client, _headers(elder)))
         story = client.post(
             "/stories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"title": "Tea", "content": "A jasmine tea memory", "memory_ids": [old_id]},
         )
         assert story.status_code == 201, story.text
 
         corrected = client.patch(
             f"/memories/{old_id}",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"content": "I enjoy oolong tea."},
         )
         assert corrected.status_code == 200, corrected.text
@@ -223,15 +224,15 @@ def test_correction_suppression_and_deletion_propagate(tmp_path: Path) -> None:
         messages = client.get(f"/conversations/{conversation['id']}/messages", headers=_headers(elder)).json()
         assert all("I enjoy jasmine tea." not in item["content"] for item in messages)
 
-        client.post(f"/memories/{new_id}/confirm", headers=_headers(elder))
+        client.post(f"/memories/{new_id}/confirm", headers=memory_revision_headers(client, _headers(elder)))
         story2 = client.post(
             "/stories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"title": "Tea 2", "content": "An oolong tea memory", "memory_ids": [new_id]},
         )
         assert story2.status_code == 201
         suppressed = client.patch(
-            f"/memories/{new_id}", headers=_headers(elder), json={"suppressed": True}
+            f"/memories/{new_id}", headers=memory_revision_headers(client, _headers(elder)), json={"suppressed": True}
         )
         assert suppressed.status_code == 200
         assert client.post(
@@ -239,7 +240,7 @@ def test_correction_suppression_and_deletion_propagate(tmp_path: Path) -> None:
         ).json()["items"] == []
         assert client.get("/stories", headers=_headers(elder)).json() == []
 
-        deleted = client.delete(f"/memories/{new_id}", headers=_headers(elder))
+        deleted = client.delete(f"/memories/{new_id}", headers=memory_revision_headers(client, _headers(elder), idempotency_key='test_memories-242-delete'))
         assert deleted.status_code == 204
         assert client.get(f"/memories/{new_id}", headers=_headers(elder)).status_code == 404
 
@@ -250,23 +251,23 @@ def test_story_sources_must_be_confirmed_and_owned(tmp_path: Path) -> None:
         elder = _register(client, "story-owner@example.test")
         other = _register(client, "story-other@example.test")
         candidate = client.post(
-            "/memories", headers=_headers(elder), json={"content": "A candidate"}
+            "/memories", headers=memory_revision_headers(client, _headers(elder)), json={"content": "A candidate"}
         ).json()
         candidate_story = client.post(
             "/stories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"title": "Candidate", "content": "Draft", "memory_ids": [candidate["id"]]},
         )
         assert candidate_story.status_code == 400
-        client.post(f"/memories/{candidate['id']}/confirm", headers=_headers(elder))
+        client.post(f"/memories/{candidate['id']}/confirm", headers=memory_revision_headers(client, _headers(elder)))
         assert client.post(
             "/stories",
-            headers=_headers(other),
+            headers=memory_revision_headers(client, _headers(other)),
             json={"title": "Wrong owner", "content": "No", "memory_ids": [candidate["id"]]},
         ).status_code == 400
         story = client.post(
             "/stories",
-            headers=_headers(elder),
+            headers=memory_revision_headers(client, _headers(elder)),
             json={"title": "Confirmed", "content": "A confirmed story", "memory_ids": [candidate["id"]]},
         )
         assert story.status_code == 201

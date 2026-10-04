@@ -58,10 +58,28 @@ void main() {
         actionId: result.action!.id, clientActionId: 'action-$suffix');
     expect(task, isNotNull);
     expect((await caregiver.listTasks()).any((item) => item.id == task!.id),
-        isTrue);
+        isFalse);
+    final preview = await elder.getTaskDetail(task!.id);
+    expect(preview.contentHash, isNotEmpty);
+    final share = await elder.createTaskShare(
+      taskId: preview.id,
+      familyLinkId: link.id,
+      expectedContentHash: preview.contentHash!,
+      idempotencyKey: 'share-$suffix',
+    );
+    expect(share.taskId, preview.id);
+    final sharedTask = (await caregiver.listTasks())
+        .singleWhere((item) => item.id == preview.id);
+    expect(sharedTask.isReadOnly, isTrue);
+    expect(sharedTask.shareId, share.id);
+    expect(
+      () => caregiver.updateTask(
+          taskId: preview.id, status: TaskStatus.completed),
+      throwsA(isA<ApiException>()),
+    );
 
     await elder.revokeLink(linkId: link.id);
-    expect((await caregiver.listTasks()).any((item) => item.id == task!.id),
+    expect((await caregiver.listTasks()).any((item) => item.id == task.id),
         isFalse);
   },
       skip:
@@ -96,21 +114,35 @@ void main() {
         content: '我喜歡飲茶',
         clientMessageId: 'source-chat-$suffix');
     expect(sourceReply.userMessage, isNotNull);
-    await elder.setMemoryConsent(true);
-    final candidate = await elder.createMemory(
+    final consentSnapshot = await elder.getMemoryControlState();
+    await elder.setMemoryConsentAtRevision(true,
+        expectedRevision: consentSnapshot.revision);
+    final createSnapshot = await elder.getMemoryControlState();
+    final candidate = await elder.createMemoryAtRevision(
+        expectedRevision: createSnapshot.revision,
         content: '我喜歡飲茶',
         kind: 'preference',
         sourceMessageId: sourceReply.userMessage!.id);
     expect(candidate.id, isNotEmpty);
-    final confirmed = await elder.confirmMemory(candidate.id);
+    final confirmSnapshot = await elder.getMemoryControlState();
+    final confirmed = await elder.confirmMemoryAtRevision(candidate.id,
+        expectedRevision: confirmSnapshot.revision);
     expect(confirmed.id, isNotEmpty);
-    final story = await elder.createStory(
-        title: '我的小習慣', content: '我喜歡飲茶', memoryIds: [confirmed.id]);
+    final storySnapshot = await elder.getMemoryControlState();
+    final story = await elder.createStoryAtRevision(
+        expectedRevision: storySnapshot.revision,
+        title: '我的小習慣',
+        content: '我喜歡飲茶',
+        memoryIds: [confirmed.id]);
     expect(story.id, isNotEmpty);
 
     final resources = await caregiver.searchResources(query: '長者服務', limit: 3);
     expect(resources.query, '長者服務');
-    final message = await elder.sendFamilyMessage(
+    final shareSnapshot = await elder.getMemoryControlState();
+    final message = await elder.sendFamilyMessageAtRevision(
+      familyLinkId: link.id,
+      expectedAuthorizationEpoch: link.authorizationEpoch!,
+      expectedRevision: shareSnapshot.revision,
       recipientId: link.caregiverId ?? caregiverSessionId(link),
       content: '${story.title}\n${story.content}',
       clientMessageId: 'family-$suffix',
@@ -123,8 +155,13 @@ void main() {
         isTrue);
     expect(resources.retrievalMode, isNotNull);
 
-    await elder.deleteStory(story.id);
-    await elder.deleteMemory(confirmed.id);
+    final deleteStorySnapshot = await elder.getMemoryControlState();
+    await elder.deleteStoryAtRevision(story.id,
+        expectedRevision: deleteStorySnapshot.revision);
+    final deleteMemorySnapshot = await elder.getMemoryControlState();
+    await elder.deleteMemoryAtRevision(confirmed.id,
+        expectedRevision: deleteMemorySnapshot.revision,
+        idempotencyKey: 'delete-memory-$suffix');
     await elder.revokeLink(linkId: link.id);
   },
       skip:

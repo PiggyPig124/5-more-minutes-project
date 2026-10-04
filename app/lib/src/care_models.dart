@@ -141,8 +141,12 @@ class EmergencyContact {
     required this.label,
     required this.caregiverName,
     required this.isEnabled,
+    this.elderId,
+    this.familyLinkId,
+    this.caregiverId,
   });
 
+  final String? elderId, familyLinkId, caregiverId;
   final String id;
   final String label;
   final String caregiverName;
@@ -151,6 +155,13 @@ class EmergencyContact {
   factory EmergencyContact.fromJson(Map<String, dynamic> json) =>
       EmergencyContact(
         id: json['id'] as String,
+        elderId: json['elder_id'] is String ? json['elder_id'] as String : null,
+        familyLinkId: json['family_link_id'] is String
+            ? json['family_link_id'] as String
+            : null,
+        caregiverId: json['caregiver_id'] is String
+            ? json['caregiver_id'] as String
+            : null,
         label: json['label'] as String,
         caregiverName: json['caregiver_name'] as String,
         isEnabled: json['is_enabled'] == true,

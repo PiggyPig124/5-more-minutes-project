@@ -273,6 +273,8 @@ def test_safety_support_request_sends_family_message(tmp_path: Path) -> None:
                 "emergency_contact_id": contact["id"],
                 "message": "我現在需要你的幫助，請聯絡我。",
                 "idempotency_key": "support-1",
+                "family_link_id": link["id"],
+                "expected_authorization_epoch": link["authorization_epoch"],
             },
         )
         assert response.status_code == 200
@@ -286,6 +288,8 @@ def test_safety_support_request_sends_family_message(tmp_path: Path) -> None:
                 "emergency_contact_id": contact["id"],
                 "message": "我現在需要你的幫助，請聯絡我。",
                 "idempotency_key": "support-1",
+                "family_link_id": link["id"],
+                "expected_authorization_epoch": link["authorization_epoch"],
             },
         )
         assert retry.status_code == 200
@@ -303,7 +307,8 @@ def test_safety_support_request_caregiver_forbidden(tmp_path: Path) -> None:
         response = client.post(
             "/safety/support-request",
             headers=_headers(caregiver),
-            json={"emergency_contact_id": "fake", "message": "help"},
+            json={"emergency_contact_id": "fake", "message": "help",
+                  "family_link_id": "unavailable-link", "expected_authorization_epoch": 1},
         )
         assert response.status_code == 403
 

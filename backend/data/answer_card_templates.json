@@ -1,0 +1,142 @@
+[
+  {
+    "template_id": "swd-ste-volunteering",
+    "template_version": 1,
+    "language": "zh",
+    "sections": [
+      {
+        "id": "swd-ste-volunteering:1:0",
+        "text": "社署指引说明，有意参与服务弱势长者的义工，可按居住或工作地区联系设于长者地区中心的长者支援队。这是咨询入口，不是某项活动的报名确认。"
+      }
+    ],
+    "public_payload": {
+      "title": "想做义工，怎样联系长者支援队？",
+      "selected_sections": [
+        "社署指引说明，有意参与服务弱势长者的义工，可按居住或工作地区联系设于长者地区中心的长者支援队。这是咨询入口，不是某项活动的报名确认。"
+      ],
+      "official_terms": [
+        "長者支援隊（Support Teams for the Elderly）。"
+      ],
+      "missing_information": [
+        "现时招募安排、岗位、时间、培训、参加条件及名额；本卡没有核实这些事项。"
+      ],
+      "next_steps": [
+        "选定希望服务的居住或工作地区。",
+        "在官方长者支援队目录查看该区单位。",
+        "自行联系单位，询问目前的义工安排及参加要求。"
+      ],
+      "public_sources": [
+        {
+          "source_id": "swd-ste-faq11",
+          "organisation": "香港特别行政区政府／社会福利署",
+          "title": "安老服务 FAQ 第 11 条",
+          "url": "https://www.swd.gov.hk/en/svcdesk/faqs/serelderly/",
+          "reviewed_at": "2026-10-03",
+          "retrieved_at": "2026-10-03",
+          "effective_date": null,
+          "verification_scope": "公共联系指引；没有核验个人资格或单位当前名额。目录联系方式会变化，联系前应查看来源。FAQ 没有声明这条问答单独的生效日期。",
+          "content_hash": "87ac8ff8fcb2d17b4aa1aa8f85c4d298547df3b51d3ebfff1d41b5f7408db3bd"
+        },
+        {
+          "source_id": "swd-ste-directory",
+          "organisation": "香港特别行政区政府／社会福利署、CSDI",
+          "title": "长者支援队目录",
+          "url": "https://portal.csdi.gov.hk/geoportal/?datasetId=swd_rcd_1696994103126_1549",
+          "reviewed_at": "2026-10-03",
+          "retrieved_at": null,
+          "effective_date": null,
+          "verification_scope": "承接已保存官方目录证据；本轮没有重新下载，不核实当前联系方式、招募或名额。",
+          "content_hash": "36f0bee3b5cc5bb1ddb80f6180b459164b5e65c0a617c5297f3074e7752c8340"
+        }
+      ],
+      "verification_state": "reviewed_public_guidance",
+      "verification_scope": "公共联系指引；没有核验个人资格或单位当前名额。目录联系方式会变化，联系前应查看来源。FAQ 没有声明这条问答单独的生效日期。"
+    }
+  },
+  {
+    "template_id": "swd-home-care-navigation",
+    "template_version": 1,
+    "language": "zh",
+    "sections": [
+      {
+        "id": "swd-home-care-navigation:1:0",
+        "text": "社署列有家居照顾和生活支援服务，例如个人照顾、护理、膳食、清洁及护送；服务种类不同，实际安排须经查询和适用评估。"
+      }
+    ],
+    "public_payload": {
+      "title": "在家生活需要帮忙，可以先问哪里？",
+      "selected_sections": [
+        "社署列有家居照顾和生活支援服务，例如个人照顾、护理、膳食、清洁及护送；服务种类不同，实际安排须经查询和适用评估。"
+      ],
+      "official_terms": [
+        "「家居為本」長者社區照顧及支援服務；包括「體弱長者家居照顧服務」和「家居支援服務」。"
+      ],
+      "missing_information": [
+        "长者服务一般涉及年满 60 岁、居于区内及相应需要评估；适用的评估途径不同。家居支援另涵盖部分其他有需要人士。本卡不能判断适用性。还须确认服务范围、收费、轮候和实际可提供项目。"
+      ],
+      "next_steps": [
+        "查看社署官方页面，了解两种服务的分别。",
+        "自行联络就近长者中心、综合家庭服务中心或医务社会服务部。",
+        "向工作人员询问所需评估、申请途径及当地服务安排。"
+      ],
+      "public_sources": [
+        {
+          "source_id": "swd-home-care-navigation",
+          "organisation": "香港特别行政区政府／社会福利署",
+          "title": "「家居為本」長者社區照顧及支援服務",
+          "url": "https://www.swd.gov.hk/tc/pubsvc/elderly/cat_commcare/homebase_ccs/",
+          "reviewed_at": "2026-10-03",
+          "retrieved_at": "2026-10-03",
+          "effective_date": "2026-04-01",
+          "verification_scope": "公共服务名称和查询入口；不是个案评估、服务批准或预约。官方页面说明相关名称自 2026-04-01 更改；这不是个人获批日期。收费、名额和安排以负责单位及最新官方资料为准。",
+          "content_hash": "d9a543b5d52db81510a7cb920ec7c7388c17a6842cba578d2908dac7aeb2e1a2"
+        }
+      ],
+      "verification_state": "reviewed_public_guidance",
+      "verification_scope": "公共服务名称和查询入口；不是个案评估、服务批准或预约。官方页面说明相关名称自 2026-04-01 更改；这不是个人获批日期。收费、名额和安排以负责单位及最新官方资料为准。"
+    }
+  },
+  {
+    "template_id": "ha-medical-fee-waiver-navigation",
+    "template_version": 1,
+    "language": "zh",
+    "sections": [
+      {
+        "id": "ha-medical-fee-waiver-navigation:1:0",
+        "text": "医院管理局设有医疗费用减免机制。需要协助的人士可到官方说明页了解正式申请和评估途径；官方自我评估计算器只供参考，不能作为获批证明。"
+      }
+    ],
+    "public_payload": {
+      "title": "公营医疗费用有困难，可以去哪里咨询？",
+      "selected_sections": [
+        "医院管理局设有医疗费用减免机制。需要协助的人士可到官方说明页了解正式申请和评估途径；官方自我评估计算器只供参考，不能作为获批证明。"
+      ],
+      "official_terms": [
+        "Medical Fee Waiver／Medical Fee Waiving Mechanism（医疗费用减免机制）。"
+      ],
+      "missing_information": [
+        "适用身份、所用医疗服务、是否适用指定豁免类别，以及需要正式评估时的家庭定义、收入／资产和其他情况、证明文件及当前准则。本卡不判断任何人符合资格或可减免金额。"
+      ],
+      "next_steps": [
+        "查看医管局官方医疗费用减免说明。",
+        "自行向公营医院／诊所医务社会服务部，或社署综合家庭服务中心查询；也可了解 HA Go 的官方申请途径。",
+        "向负责人员确认所需文件和正式评估程序，再决定是否申请。"
+      ],
+      "public_sources": [
+        {
+          "source_id": "ha-medical-fee-waiver-navigation",
+          "organisation": "医院管理局",
+          "title": "Waiving of Medical Charges (For Eligible persons)",
+          "url": "https://www.ha.org.hk/haho/ho/cs/v3/serviceguide_feewaving_en_v3_a.htm",
+          "reviewed_at": "2026-10-03",
+          "retrieved_at": "2026-10-03",
+          "effective_date": null,
+          "verification_scope": "公共咨询和申请入口；没有评估个人资格、代办申请或安排预约。准则可改变，应以最新官方资料及正式评估为准。",
+          "content_hash": "bbf92289ef6d703b329c537822e65f8eec0752a1ea166f4623761dadb2f1b321"
+        }
+      ],
+      "verification_state": "reviewed_public_guidance",
+      "verification_scope": "公共咨询和申请入口；没有评估个人资格、代办申请或安排预约。准则可改变，应以最新官方资料及正式评估为准。"
+    }
+  }
+]

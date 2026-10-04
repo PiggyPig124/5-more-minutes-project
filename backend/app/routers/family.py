@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..dependencies import get_current_account, require_elder
 from ..models import Account, FamilyInvitation, FamilyLink
+from ..task_share_service import begin_guard, revoke_shares
+from ..family_connection_service import withdraw_family_access, pair_is_blocked
 from ..schemas import (
     AccountPublic,
     FamilyInvitationAccept,
@@ -39,9 +41,9 @@ def _invitation_out(invitation: FamilyInvitation, token: str | None = None) -> F
         email=invitation.email,
         scopes=list(invitation.scopes or []),
         status=invitation.status,
-        expires_at=invitation.expires_at,
-        created_at=invitation.created_at,
-        accepted_at=invitation.accepted_at,
+        expires_at=_as_utc(invitation.expires_at),
+        created_at=_as_utc(invitation.created_at),
+        accepted_at=_as_utc(invitation.accepted_at) if invitation.accepted_at else None,
         token=token,
     )
 
@@ -50,13 +52,14 @@ def _link_out(db: Session, link: FamilyLink) -> FamilyLinkOut:
     elder = db.get(Account, link.elder_id)
     caregiver = db.get(Account, link.caregiver_id)
     return FamilyLinkOut(
+        authorization_epoch=link.authorization_epoch,
         id=link.id,
         elder_id=link.elder_id,
         caregiver_id=link.caregiver_id,
         scopes=list(link.scopes or []),
         status=link.status,
-        created_at=link.created_at,
-        revoked_at=link.revoked_at,
+        created_at=_as_utc(link.created_at),
+        revoked_at=_as_utc(link.revoked_at) if link.revoked_at else None,
         elder=AccountPublic.model_validate(elder) if elder else None,
         caregiver=AccountPublic.model_validate(caregiver) if caregiver else None,
     )
@@ -68,7 +71,12 @@ def create_invitation(
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
 ) -> FamilyInvitationOut:
+    account_id = account.id
+    begin_guard(db, {account_id})
+    account = db.get(Account, account_id)
     caregiver = db.scalar(select(Account).where(Account.email == payload.email))
+    if caregiver and pair_is_blocked(db, account_id, caregiver.id):
+        raise HTTPException(403, 'Connection unavailable')
     if caregiver is not None and caregiver.id == account.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An elder cannot invite their own account")
     raw_token = secrets.token_urlsafe(32)
@@ -111,6 +119,11 @@ def _accept_invitation(
     account: Account,
     db: Session,
 ) -> FamilyLinkOut:
+    account_id = account.id
+    invitation = db.get(FamilyInvitation, invitation_id)
+    owner_id = invitation.elder_id if invitation else account_id
+    begin_guard(db, {owner_id})
+    account = db.get(Account, account_id)
     if account.role != "caregiver":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only caregiver accounts can accept invitations")
     invitation = db.get(FamilyInvitation, invitation_id)
@@ -120,6 +133,8 @@ def _accept_invitation(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid invitation token")
     if invitation.email != account.email:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This invitation belongs to another email")
+    if pair_is_blocked(db, invitation.elder_id, account.id):
+        raise HTTPException(403, 'Connection unavailable')
     if invitation.status == "revoked":
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invitation has been revoked")
     if invitation.status == "expired" or _as_utc(invitation.expires_at) <= datetime.now(timezone.utc):
@@ -127,15 +142,14 @@ def _accept_invitation(
         db.commit()
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invitation has expired")
     if invitation.status == "accepted":
-        link = db.scalar(
-            select(FamilyLink).where(
-                FamilyLink.elder_id == invitation.elder_id,
-                FamilyLink.caregiver_id == account.id,
-            )
-        )
-        if link is not None:
+        link = db.get(FamilyLink, invitation.accepted_link_id) if invitation.accepted_link_id else None
+        if (link and link.status == "active" and link.elder_id == invitation.elder_id
+                and link.caregiver_id == account.id and invitation.accepted_by == account.id
+                and invitation.accepted_epoch == link.authorization_epoch):
             return _link_out(db, link)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invitation was already accepted")
+        raise HTTPException(410, "Invitation authorization is no longer available")
+    if invitation.status != "pending":
+        raise HTTPException(410, "Invitation is no longer available")
 
     link = db.scalar(
         select(FamilyLink).where(
@@ -147,9 +161,14 @@ def _accept_invitation(
         link = FamilyLink(elder_id=invitation.elder_id, caregiver_id=account.id, scopes=list(invitation.scopes), status="active")
         db.add(link)
     else:
+        if link.status != "active" or set(link.scopes or []) != set(invitation.scopes or []):
+            withdraw_family_access(db, link, "family_link_changed")
         link.status = "active"
         link.scopes = list(invitation.scopes)
         link.revoked_at = None
+    db.flush()
+    invitation.accepted_link_id = link.id
+    invitation.accepted_epoch = link.authorization_epoch
     invitation.status = "accepted"
     invitation.accepted_by = account.id
     invitation.accepted_at = datetime.now(timezone.utc)
@@ -222,18 +241,19 @@ def list_links(account: Account = Depends(get_current_account), db: Session = De
 
 def _revoke_link(link_id: str, account: Account, db: Session) -> FamilyLinkOut:
     account_id = account.id
-    db.rollback()
-    if db.bind.dialect.name == "sqlite":
-        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    candidate = db.get(FamilyLink, link_id)
+    owner_id = candidate.elder_id if candidate else account_id
+    begin_guard(db, {owner_id})
     link = db.scalar(select(FamilyLink).where(FamilyLink.id == link_id).with_for_update())
     if link is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Family link not found")
     if account_id not in {link.elder_id, link.caregiver_id}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot revoke this family link")
     if link.status != "revoked":
+        withdraw_family_access(db, link, "family_link_revoked")
         link.status = "revoked"
         link.revoked_at = datetime.now(timezone.utc)
-        db.commit()
+    db.commit()
     return _link_out(db, link)
 
 

@@ -118,7 +118,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('由你管理記憶'), findsOneWidget);
     expect(find.textContaining('記憶預設關閉'), findsOneWidget);
+    await tester.scrollUntilVisible(
+        find.textContaining('目前沒有記憶'), 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     expect(find.textContaining('目前沒有記憶'), findsOneWidget);
+    expect(fakeApi.fakeMemories, isEmpty);
   });
 
   testWidgets(
@@ -158,7 +163,7 @@ void main() {
       ),
     ));
 
-    expect(find.text('Saved automatically'), findsOneWidget);
+    expect(find.text('Saved automatically (review pending)'), findsOneWidget);
     expect(
         find.textContaining('saved automatically from chat'), findsOneWidget);
     expect(find.text('Edit'), findsOneWidget);
@@ -260,7 +265,7 @@ void main() {
     await tester.tap(find.text('檢視並確認發送'));
     await tester.pumpAndSettle();
     expect(find.text('請確認後才會發送'), findsOneWidget);
-    expect(find.text('收件人：照顧者'), findsOneWidget);
+    expect(find.text('收件人：照顧者\ncaregiver@example.com'), findsOneWidget);
     expect(fakeApi.fakeFamilyMessages, isEmpty);
     await tester.tap(find.text('確認發送'));
     await tester.pumpAndSettle();

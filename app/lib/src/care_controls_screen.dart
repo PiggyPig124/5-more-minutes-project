@@ -29,6 +29,7 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
       : null;
   late final String? _userId;
   late final String? _token;
+  late final int _familyGeneration;
   late final bool _elder;
   late int _tab;
   bool _loading = false;
@@ -47,16 +48,43 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
       mounted &&
       _userId != null &&
       widget.controller.user?.id == _userId &&
-      widget.controller.session?.accessToken == _token;
+      widget.controller.session?.accessToken == _token &&
+      widget.controller.familyConnectionGeneration == _familyGeneration;
 
   @override
   void initState() {
     super.initState();
     _userId = widget.controller.user?.id;
     _token = widget.controller.session?.accessToken;
+    _familyGeneration = widget.controller.familyConnectionGeneration;
+    widget.controller.addListener(_invalidateFamilyCache);
     _elder = widget.controller.isElder;
     _tab = widget.initialTab.clamp(0, _elder ? 2 : 1);
     Future<void>.microtask(_load);
+  }
+
+  void _invalidateFamilyCache() {
+    if (!mounted || _active) return;
+    // Retire this screen rather than reusing its old captured recipients or
+    // allowing late requests to populate a newer consent generation.
+    setState(() {
+      _notifications = [];
+      _contacts = [];
+      _links = [];
+      _events = [];
+      _loaded.clear();
+      _loading = false;
+      _busy = false;
+      _dirty = false;
+      _error = null;
+      _notice = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_invalidateFamilyCache);
+    super.dispose();
   }
 
   String _failure(Object error) {
@@ -103,6 +131,7 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
         _contacts = values[0] as List<EmergencyContact>;
         _links = (values[1] as List<FamilyInvitation>)
             .where((link) =>
+                link.actionable &&
                 link.status == InvitationStatus.accepted &&
                 link.allowsFamilyMessages)
             .toList();
@@ -265,9 +294,34 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
     });
   }
 
+  FamilyInvitation? _contactLink(EmergencyContact contact) {
+    if (contact.elderId != _userId ||
+        contact.familyLinkId == null ||
+        contact.caregiverId == null) {
+      return null;
+    }
+    for (final link in _links) {
+      if (link.actionable &&
+          link.allowsFamilyMessages &&
+          link.id == contact.familyLinkId &&
+          link.elderId == _userId &&
+          link.caregiverId == contact.caregiverId) {
+        return link;
+      }
+    }
+    return null;
+  }
+
+  List<EmergencyContact> get _authorizedContacts => _contacts
+      .where((contact) => contact.isEnabled && _contactLink(contact) != null)
+      .toList();
+
   Future<void> _support({String? eventId}) async {
-    final enabled = _contacts.where((contact) => contact.isEnabled).toList();
+    final enabled = _authorizedContacts;
     if (!_active || enabled.isEmpty) return;
+    final previewLinks = {
+      for (final contact in enabled) contact.id: _contactLink(contact)!
+    };
     final preview = await showDialog<_SupportPreview>(
       context: context,
       builder: (_) => _SupportDialog(contacts: enabled),
@@ -275,7 +329,17 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
     if (!_active || preview == null) return;
     await _run(() async {
       final store = widget.controller.sessionStore;
-      final recipient = 'safety:${preview.contact.id}';
+      final link = previewLinks[preview.contact.id];
+      final currentLink = _contactLink(preview.contact);
+      if (!_active ||
+          link == null ||
+          currentLink == null ||
+          currentLink.id != link.id ||
+          currentLink.authorizationEpoch != link.authorizationEpoch) {
+        return;
+      }
+      final recipient =
+          'safety:${preview.contact.id}:link:${link.id}:epoch:${link.authorizationEpoch}';
       var retryId = await store.readFamilyMessageClientId(
         recipientId: recipient,
         content: preview.message,
@@ -291,12 +355,23 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
         clientId: retryId,
       );
       if (!mounted || !_active) return;
-      await _api!.sendSupportRequest(
-        emergencyContactId: preview.contact.id,
-        message: preview.message,
-        idempotencyKey: retryId,
-        safetyEventId: eventId,
-      );
+      if (_api is FamilySupportPreviewApi) {
+        await (_api! as FamilySupportPreviewApi).sendSupportRequestForPreview(
+          emergencyContactId: preview.contact.id,
+          message: preview.message,
+          idempotencyKey: retryId,
+          safetyEventId: eventId,
+          familyLinkId: link.id,
+          expectedAuthorizationEpoch: link.authorizationEpoch!,
+        );
+      } else {
+        await _api!.sendSupportRequest(
+          emergencyContactId: preview.contact.id,
+          message: preview.message,
+          idempotencyKey: retryId,
+          safetyEventId: eventId,
+        );
+      }
       if (!mounted || !_active) return;
       // Retain the ID even after success so reopening and retrying cannot duplicate delivery.
       _notice = tr(context, '訊息已送達所選聯絡人的應用程式內收件匣。這不是緊急派遣，也不代表對方已閱讀。',
@@ -583,7 +658,7 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
           const SizedBox(height: 10),
           FilledButton.icon(
               key: const Key('preview-designated-support'),
-              onPressed: _busy || !_contacts.any((contact) => contact.isEnabled)
+              onPressed: _busy || _authorizedContacts.isEmpty
                   ? null
                   : () => _support(),
               icon: const Icon(Icons.preview_outlined),
@@ -608,10 +683,9 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
                 : tr(context, '尚未發送求助訊息', 'No support request sent')),
             if (!event.supportRequestSent && event.resolvedAt == null)
               TextButton(
-                  onPressed:
-                      _busy || !_contacts.any((contact) => contact.isEnabled)
-                          ? null
-                          : () => _support(eventId: event.id),
+                  onPressed: _busy || _authorizedContacts.isEmpty
+                      ? null
+                      : () => _support(eventId: event.id),
                   child: Text(tr(context, '為此紀錄預覽求助訊息',
                       'Preview support for this event'))),
           ],
@@ -640,7 +714,12 @@ class _CareControlsScreenState extends State<CareControlsScreen> {
             body: SafeArea(
                 child: !_active
                     ? Center(
-                        child: Text(tr(context, '請先登入。', 'Please sign in.')))
+                        child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Text(tr(
+                                context,
+                                '帳戶或家庭權限已變更。請關閉此頁面後重新開啟，以查看目前可存取的內容。',
+                                'Account or family permissions changed. Close this screen and reopen it to view currently available content.'))))
                     : ListView(padding: const EdgeInsets.all(20), children: [
                         _localInfo(),
                         if (_api == null)

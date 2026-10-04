@@ -5,6 +5,15 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'models.dart';
+import 'answer_card_api.dart';
+import 'answer_card_export_api.dart';
+export 'answer_card_export_api.dart';
+import 'answer_card_sharing_api.dart';
+export 'answer_card_sharing_api.dart';
+
+export 'answer_card_api.dart';
+import 'family_connection_api.dart';
+export 'family_connection_api.dart';
 import 'care_features_api.dart';
 import 'care_models.dart';
 export 'care_features_api.dart';
@@ -144,6 +153,61 @@ abstract interface class ConsentApi {
   Future<bool> setMemoryConsent(bool enabled);
 }
 
+abstract interface class MemoryControlApi {
+  Future<MemoryControlState> getMemoryControlState();
+  Future<MemoryControlState> setMemoryConsentAtRevision(bool enabled,
+      {required int expectedRevision});
+  Future<MemoryRecord> createMemoryAtRevision(
+      {required String content,
+      required String kind,
+      String? sourceMessageId,
+      required int expectedRevision});
+  Future<MemoryRecord> saveConfirmedMemoryAtRevision(
+      {required String content,
+      required String kind,
+      String? sourceMessageId,
+      String? topicKey,
+      required int expectedRevision});
+  Future<MemoryRecord> confirmMemoryAtRevision(String memoryId,
+      {required int expectedRevision});
+  Future<MemoryRecord> updateMemoryAtRevision(String memoryId,
+      {String? content, bool? suppressed, required int expectedRevision});
+  Future<void> deleteMemoryAtRevision(String memoryId,
+      {required int expectedRevision, required String idempotencyKey});
+  Future<MemoryDeletionReceipt> deleteMemories(
+      {required String mode,
+      List<String> memoryIds = const [],
+      required int expectedRevision,
+      required String idempotencyKey});
+  Future<List<SkillSuggestion>> listSkillSuggestionsAtRevision(
+      {required int expectedRevision});
+  Future<SkillSuggestion> decideSkillAtRevision(String id,
+      {required String decision, String? skill, required int expectedRevision});
+  Future<StoryRecord> createStoryAtRevision(
+      {required String title,
+      required String content,
+      required List<String> memoryIds,
+      required int expectedRevision});
+  Future<void> deleteStoryAtRevision(String storyId,
+      {required int expectedRevision});
+  Future<FamilyMessage> sendFamilyMessageAtRevision(
+      {required String recipientId,
+      required String content,
+      required String clientMessageId,
+      required String sourceStoryId,
+      required int expectedRevision});
+}
+
+/// Optional private card editing; existing core API doubles remain compatible.
+abstract interface class StoryEditApi {
+  Future<StoryRecord> updateStoryAtRevision(
+    String storyId, {
+    required String title,
+    required String content,
+    required int expectedRevision,
+  });
+}
+
 abstract interface class MemorySaveApi {
   Future<MemoryRecord> saveConfirmedMemory(
       {required String content,
@@ -167,6 +231,23 @@ abstract interface class CommunityApi {
   Future<List<CommunityOpportunity>> listOpportunities(String skillId);
   Future<CommunitySearchResult<CommunityOpportunity>> searchOpportunities(
       String skillId);
+}
+
+/// Optional item-level sharing capability; legacy AnxinApi implementations
+/// remain usable without exposing task sharing controls.
+abstract interface class TaskSharingApi {
+  Future<CareTask> getTaskDetail(String taskId);
+  Future<List<TaskShare>> listTaskShares(String taskId);
+  Future<TaskShare> createTaskShare({
+    required String taskId,
+    required String familyLinkId,
+    required String expectedContentHash,
+    required String idempotencyKey,
+  });
+  Future<TaskShare> revokeTaskShare({
+    required String taskId,
+    required String shareId,
+  });
 }
 
 class ApiException implements Exception {
@@ -241,14 +322,23 @@ abstract interface class CatalogScamApi {
 class RestApiClient
     implements
         AnxinApi,
+        AnswerCardApi,
+        AnswerCardExportApi,
+        AnswerCardSharingApi,
         GuestApi,
         ConsentApi,
         CommunityApi,
         MemorySaveApi,
+        MemoryControlApi,
+        StoryEditApi,
         GuestResourceApi,
         HumanGroupApi,
         CareFeaturesApi,
-        CatalogScamApi {
+        CatalogScamApi,
+        TaskSharingApi,
+        FamilyConnectionApi,
+        FamilyMessagePreviewApi,
+        FamilySupportPreviewApi {
   RestApiClient({
     String? origin,
     http.Client? client,
@@ -257,6 +347,166 @@ class RestApiClient
   })  : origin = _normalizeOrigin(origin ?? defaultApiOrigin),
         _client = client ?? http.Client(),
         _requestTimeout = requestTimeout;
+
+  T _answerCardResponse<T>(Object? raw, T Function(Object?) parse) {
+    try {
+      return parse(raw);
+    } on FormatException {
+      throw const ApiException('Invalid answer card response.');
+    }
+  }
+
+  void _answerCardRequest(void Function() validate) {
+    try {
+      validate();
+    } on FormatException {
+      throw const ApiException('Invalid captured answer card request.', statusCode: 422);
+    }
+  }
+
+  @override
+  Future<AnswerCardExportSnapshot> getAnswerCardExportPreview(String cardId, {
+    required int expectedVersion, required String previewedPayloadHash,
+    required bool personalReviewAck,
+  }) async {
+    _answerCardRequest(() {
+      validateAnswerCardIdentity(cardId);
+      if (expectedVersion < 1 || !RegExp(r'^[a-f0-9]{64}$').hasMatch(previewedPayloadHash)) {
+        throw const FormatException('Invalid captured export request');
+      }
+    });
+    final result = _answerCardResponse(await _request('POST',
+      '/answer-cards/${Uri.encodeComponent(cardId)}/export-preview', body: {
+        'expected_version': expectedVersion,
+        'previewed_payload_hash': previewedPayloadHash,
+        'personal_review_ack': personalReviewAck,
+      }), AnswerCardExportSnapshot.fromJson);
+    if (result.cardVersion != expectedVersion || result.publicPayloadHash != previewedPayloadHash) {
+      throw const ApiException('Export preview does not match the reviewed card.');
+    }
+    return result;
+  }
+
+  @override
+  Future<AnswerCardShare> shareAnswerCard(String cardId, Map<String, Object?> request) async {
+    _answerCardRequest(() => validateAnswerCardShareRequest(cardId, request));
+    final captured = Map<String, Object?>.unmodifiable(request);
+    final share = _answerCardResponse(await _request('POST',
+      '/answer-cards/${Uri.encodeComponent(cardId)}/shares', body: captured), AnswerCardShare.fromJson);
+    if (share.cardVersion != captured['expected_version'] ||
+        share.publicPayloadHash != captured['previewed_payload_hash'] ||
+        share.recipientId != captured['recipient_id'] ||
+        share.linkId != captured['expected_link_id'] || share.linkEpoch != captured['expected_link_epoch']) {
+      throw const ApiException('Share receipt does not match the reviewed recipient and card.');
+    }
+    return share;
+  }
+
+  @override
+  Future<List<AnswerCardShare>> listAnswerCardInbox() async =>
+    _answerCardResponse(await _request('GET', '/answer-card-shares/inbox'), (raw) {
+      if (raw is! List) throw const FormatException('Expected card inbox');
+      return List<AnswerCardShare>.unmodifiable(raw.map(AnswerCardShare.fromJson));
+    });
+
+  @override
+  Future<List<AnswerCardSentShare>> listSentAnswerCardShares() async =>
+    _answerCardResponse(await _request('GET', '/answer-card-shares/sent'), (raw) {
+      if (raw is! List) throw const FormatException('Expected sent cards');
+      return List<AnswerCardSentShare>.unmodifiable(raw.map(AnswerCardSentShare.fromJson));
+    });
+
+  @override
+  Future<AnswerCardShareRevokeReceipt> revokeAnswerCardShare(String shareId) async {
+    _answerCardRequest(() => validateAnswerCardIdentity(shareId));
+    final receipt = _answerCardResponse(await _request('POST',
+      '/answer-card-shares/${Uri.encodeComponent(shareId)}/revoke', body: <String, Object?>{}),
+      AnswerCardShareRevokeReceipt.fromJson);
+    if (receipt.id != shareId) throw const ApiException('Withdrawal receipt does not match.');
+    return receipt;
+  }
+
+  @override
+  Future<List<AnswerCardTemplate>> listAnswerCardTemplates() async {
+    final raw = await _request('GET', '/answer-card-templates');
+    return _answerCardResponse(raw, (value) {
+      if (value is! List) throw const FormatException('Expected template list');
+      return List<AnswerCardTemplate>.unmodifiable(value.map(AnswerCardTemplate.fromJson));
+    });
+  }
+
+  @override
+  Future<AnswerCardDraftSnapshot> prepareAnswerCard(String sourceMessageId) async {
+    _answerCardRequest(() => validateAnswerCardIdentity(sourceMessageId));
+    final draft = _answerCardResponse(await _request('POST', '/answer-cards/prepare',
+      body: {'source_message_id': sourceMessageId}), AnswerCardDraftSnapshot.fromJson);
+    if (draft.sourceMessageId != sourceMessageId) {
+      throw const ApiException('Answer card draft source does not match.');
+    }
+    return draft;
+  }
+
+  @override
+  Future<List<OwnedAnswerCard>> listAnswerCards() async {
+    final raw = await _request('GET', '/answer-cards');
+    return _answerCardResponse(raw, (value) {
+      if (value is! List) throw const FormatException('Expected owned card list');
+      return List<OwnedAnswerCard>.unmodifiable(value.map(OwnedAnswerCard.fromJson));
+    });
+  }
+
+  @override
+  Future<OwnedAnswerCard> createAnswerCard(Map<String, Object?> request) async {
+    _answerCardRequest(() => validateAnswerCardCreateRequest(request));
+    final origin = Map<String, Object?>.of(request['origin'] as Map<String, Object?>);
+    final card = _answerCardResponse(await _request('POST', '/answer-cards', body: request),
+      OwnedAnswerCard.fromJson);
+    final provenance = card.provenance;
+    final matches = origin.containsKey('message_id')
+        ? card.mode == 'assistant_answer' &&
+            provenance['origin_message_id'] == origin['message_id'] &&
+            provenance['origin_hash'] == origin['source_hash']
+        : card.mode == 'public_template' &&
+            provenance['template_id'] == origin['template_id'] &&
+            provenance['template_version'] == origin['template_version'] &&
+            provenance['template_hash'] == origin['template_hash'];
+    if (!matches) {
+      throw const ApiException('Answer card creation receipt source does not match.');
+    }
+    return card;
+  }
+
+  @override
+  Future<OwnedAnswerCard> updateAnswerCard(String cardId, Map<String, Object?> request) async {
+    _answerCardRequest(() {
+      validateAnswerCardIdentity(cardId);
+      validateAnswerCardUpdateRequest(request);
+    });
+    final capturedVersion = request['expected_version'] as int;
+    final card = _answerCardResponse(await _request('PATCH',
+      '/answer-cards/${Uri.encodeComponent(cardId)}', body: request), OwnedAnswerCard.fromJson);
+    if (card.id != cardId || card.version != capturedVersion + 1) {
+      throw const ApiException('Answer card edit receipt does not match.');
+    }
+    return card;
+  }
+
+  @override
+  Future<AnswerCardDeleteReceipt> deleteAnswerCard({required String cardId,
+    required int expectedVersion, required String clientOperationId}) async {
+    _answerCardRequest(() {
+      validateAnswerCardIdentity(cardId);
+      validateAnswerCardDeleteRequest(expectedVersion, clientOperationId);
+    });
+    final receipt = _answerCardResponse(await _request('DELETE',
+      '/answer-cards/${Uri.encodeComponent(cardId)}', body: {
+        'expected_version': expectedVersion, 'client_operation_id': clientOperationId,
+      }), AnswerCardDeleteReceipt.fromJson);
+    if (receipt.id != cardId || receipt.version != expectedVersion + 1) {
+      throw const ApiException('Answer card deletion receipt does not match.');
+    }
+    return receipt;
+  }
 
   final String origin;
   final http.Client _client;
@@ -581,20 +831,43 @@ class RestApiClient
     required String message,
     required String idempotencyKey,
     String? safetyEventId,
+    String? familyLinkId,
+    int? expectedAuthorizationEpoch,
   }) async {
     if (idempotencyKey.trim().isEmpty) {
       throw ArgumentError.value(
           idempotencyKey, 'idempotencyKey', 'Must not be empty');
     }
+    _validateFamilyPreview(familyLinkId, expectedAuthorizationEpoch);
     await _request('POST', '/safety/support-request',
         body: {
           'emergency_contact_id': emergencyContactId,
           'message': message,
           'idempotency_key': idempotencyKey,
           'safety_event_id': safetyEventId,
+          'family_link_id': familyLinkId,
+          'expected_authorization_epoch': expectedAuthorizationEpoch,
         },
         idempotencyKey: idempotencyKey);
   }
+
+  @override
+  Future<void> sendSupportRequestForPreview({
+    required String emergencyContactId,
+    required String message,
+    required String idempotencyKey,
+    required String familyLinkId,
+    required int expectedAuthorizationEpoch,
+    String? safetyEventId,
+  }) =>
+      sendSupportRequest(
+        emergencyContactId: emergencyContactId,
+        message: message,
+        idempotencyKey: idempotencyKey,
+        safetyEventId: safetyEventId,
+        familyLinkId: familyLinkId,
+        expectedAuthorizationEpoch: expectedAuthorizationEpoch,
+      );
 
   static Map<String, dynamic> _requireCareObject(Object? body) {
     final map = mapFromJson(body);
@@ -809,15 +1082,17 @@ class RestApiClient
 
   @override
   Future<bool> setMemoryConsent(bool enabled) async {
-    final map = mapFromJson(await _request(
-      'PUT',
-      '/memories/consent',
-      body: {'enabled': enabled},
-    ));
-    if (map == null || map['enabled'] is! bool) {
-      throw const ApiException('服務未確認記憶設定。');
-    }
-    return map['enabled'] as bool;
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<MemoryControlState> setMemoryConsentAtRevision(bool enabled,
+      {required int expectedRevision}) async {
+    _validateMemoryRevision(expectedRevision);
+    final map = mapFromJson(await _request('PUT', '/memories/consent',
+        body: {'enabled': enabled}, memoryRevision: expectedRevision));
+    return _parseControlState(map);
   }
 
   @override
@@ -826,14 +1101,30 @@ class RestApiClient
       required String kind,
       String? sourceMessageId,
       String? topicKey}) async {
-    final body = await _request('POST', '/memories/save', body: {
-      'content': content,
-      'kind': kind,
-      if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
-        'source_message_id': sourceMessageId,
-      if (topicKey != null && topicKey.trim().isNotEmpty) 'topic_key': topicKey,
-    });
-    return _requireMemory(body);
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<MemoryRecord> saveConfirmedMemoryAtRevision({
+    required String content,
+    required String kind,
+    String? sourceMessageId,
+    String? topicKey,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
+    final body = await _request('POST', '/memories/save',
+        body: {
+          'content': content,
+          'kind': kind,
+          if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
+            'source_message_id': sourceMessageId,
+          if (topicKey != null && topicKey.trim().isNotEmpty)
+            'topic_key': topicKey,
+        },
+        memoryRevision: expectedRevision);
+    return _requireVersionedMemory(body);
   }
 
   @override
@@ -859,21 +1150,50 @@ class RestApiClient
 
   @override
   Future<List<SkillSuggestion>> listSkillSuggestions() async {
-    final map =
-        mapFromJson(await _request('GET', '/community/skills/suggestions'));
-    return mapsFromJson(map?['items']).map(SkillSuggestion.fromJson).toList();
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<List<SkillSuggestion>> listSkillSuggestionsAtRevision(
+      {required int expectedRevision}) async {
+    _validateMemoryRevision(expectedRevision);
+    final map = mapFromJson(await _request(
+        'GET', '/community/skills/suggestions',
+        memoryRevision: expectedRevision));
+    final skills =
+        mapsFromJson(map?['items']).map(SkillSuggestion.fromJson).toList();
+    if (skills.any((skill) => skill.revision == null)) {
+      throw const ApiException('Missing skill revision.');
+    }
+    return skills;
   }
 
   @override
   Future<SkillSuggestion> decideSkill(String id,
       {required String decision, String? skill}) async {
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<SkillSuggestion> decideSkillAtRevision(
+    String id, {
+    required String decision,
+    String? skill,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
     final map = mapFromJson(await _request(
-      'POST',
-      '/community/skills/${Uri.encodeComponent(id)}/decision',
-      body: {'decision': decision, if (skill != null) 'skill': skill},
-    ));
+        'POST', '/community/skills/${Uri.encodeComponent(id)}/decision',
+        body: {'decision': decision, if (skill != null) 'skill': skill},
+        memoryRevision: expectedRevision));
     if (map == null) throw const ApiException('服務未確認技能選擇。');
-    return SkillSuggestion.fromJson(map);
+    final suggestion = SkillSuggestion.fromJson(map);
+    if (suggestion.revision == null) {
+      throw const ApiException('Missing skill revision.');
+    }
+    return suggestion;
   }
 
   @override
@@ -928,6 +1248,7 @@ class RestApiClient
     String path, {
     Map<String, Object?>? body,
     String? idempotencyKey,
+    int? memoryRevision,
   }) async {
     final uri = _uri(path);
     try {
@@ -939,6 +1260,8 @@ class RestApiClient
               ..headers.addAll({
                 if (idempotencyKey != null && idempotencyKey.isNotEmpty)
                   'Idempotency-Key': idempotencyKey,
+                if (memoryRevision != null)
+                  'X-Memory-Revision': memoryRevision.toString(),
               })
               ..body = encodedBody ?? '',
           )
@@ -1145,6 +1468,59 @@ class RestApiClient
   }
 
   @override
+  Future<CareTask> getTaskDetail(String taskId) async {
+    final body = await _request('GET', '/tasks/${Uri.encodeComponent(taskId)}');
+    final map = mapFromJson(body);
+    if (map == null) {
+      throw const ApiException('Task details were not returned.');
+    }
+    final task = CareTask.fromJson(map);
+    if (task.id.isEmpty) {
+      throw const ApiException('Task details were not returned.');
+    }
+    return task;
+  }
+
+  @override
+  Future<List<TaskShare>> listTaskShares(String taskId) async {
+    final body =
+        await _request('GET', '/tasks/${Uri.encodeComponent(taskId)}/shares');
+    if (body is! List) {
+      throw const ApiException('Sharing history was not returned.');
+    }
+    return body.map(_requireTaskShare).toList(growable: false);
+  }
+
+  @override
+  Future<TaskShare> createTaskShare({
+    required String taskId,
+    required String familyLinkId,
+    required String expectedContentHash,
+    required String idempotencyKey,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/tasks/${Uri.encodeComponent(taskId)}/shares',
+      body: {
+        'family_link_id': familyLinkId,
+        'expected_content_hash': expectedContentHash,
+        'idempotency_key': idempotencyKey,
+      },
+    );
+    return _requireTaskShare(body);
+  }
+
+  @override
+  Future<TaskShare> revokeTaskShare({
+    required String taskId,
+    required String shareId,
+  }) async {
+    final body = await _request('DELETE',
+        '/tasks/${Uri.encodeComponent(taskId)}/shares/${Uri.encodeComponent(shareId)}');
+    return _requireTaskShare(body);
+  }
+
+  @override
   Future<CareTask> updateTask({
     required String taskId,
     required TaskStatus status,
@@ -1182,6 +1558,100 @@ class RestApiClient
       'POST',
       '/actions/${Uri.encodeComponent(actionId)}/dismiss',
     );
+  }
+
+  @override
+  Future<List<FamilyConnectionRequest>> listConnectionRequests() async =>
+      mapsFromJson(await _request('GET', '/family-links/requests'))
+          .map(FamilyConnectionRequest.fromJson)
+          .toList();
+
+  @override
+  Future<FamilyConnectionRequest> createConnectionRequest(
+          {required String elderEmail,
+          required String clientRequestId}) async =>
+      FamilyConnectionRequest.fromJson(_familyResponse(
+          await _request('POST', '/family-links/requests', body: {
+        'elder_email': elderEmail,
+        'client_request_id': clientRequestId,
+      })));
+
+  @override
+  Future<FamilyInvitation> approveConnectionRequest(
+          {required String requestId,
+          required int expectedVersion,
+          required List<String> scopes}) async =>
+      FamilyInvitation.fromJson(_familyResponse(await _request('POST',
+          '/family-links/requests/${Uri.encodeComponent(requestId)}/decision',
+          body: {
+            'decision': 'approve',
+            'expected_version': expectedVersion,
+            'scopes': scopes,
+          })));
+
+  @override
+  Future<FamilyConnectionRequest> rejectConnectionRequest(
+          {required String requestId, required int expectedVersion}) async =>
+      FamilyConnectionRequest.fromJson(_familyResponse(await _request('POST',
+          '/family-links/requests/${Uri.encodeComponent(requestId)}/decision',
+          body: {
+            'decision': 'reject',
+            'expected_version': expectedVersion,
+          })));
+
+  @override
+  Future<FamilyConnectionRequest> withdrawConnectionRequest(
+          {required String requestId, required int expectedVersion}) async =>
+      FamilyConnectionRequest.fromJson(_familyResponse(await _request('POST',
+          '/family-links/requests/${Uri.encodeComponent(requestId)}/withdraw',
+          body: {
+            'expected_version': expectedVersion,
+          })));
+
+  @override
+  Future<List<FamilyBlock>> listFamilyBlocks() async =>
+      mapsFromJson(await _request('GET', '/family-links/blocks'))
+          .map(FamilyBlock.fromJson)
+          .toList();
+
+  @override
+  Future<FamilyBlock> blockFamilyPair(
+          {required String caregiverId,
+          String? requestId,
+          String? linkId,
+          required String clientOperationId}) async =>
+      FamilyBlock.fromJson(
+          _familyResponse(await _request('POST', '/family-links/blocks', body: {
+        'caregiver_id': caregiverId,
+        if (requestId != null) 'request_id': requestId,
+        if (linkId != null) 'link_id': linkId,
+        'client_operation_id': clientOperationId,
+      })));
+
+  @override
+  Future<FamilyBlock> unblockFamilyPair(
+          {required String caregiverId,
+          required int expectedVersion,
+          required String clientOperationId}) async =>
+      FamilyBlock.fromJson(_familyResponse(await _request('POST',
+          '/family-links/blocks/${Uri.encodeComponent(caregiverId)}/unblock',
+          body: {
+            'expected_version': expectedVersion,
+            'client_operation_id': clientOperationId,
+          })));
+
+  @override
+  Future<List<FamilyMessage>> listSentFamilyMessages() async =>
+      mapsFromJson(await _request('GET', '/family-messages/sent'))
+          .map(FamilyMessage.fromJson)
+          .toList();
+
+  Map<String, dynamic> _familyResponse(Object? body) {
+    final map = mapFromJson(body);
+    if (map == null) {
+      throw const ApiException('Invalid family connection response.');
+    }
+    return map;
   }
 
   @override
@@ -1276,22 +1746,43 @@ class RestApiClient
     required String kind,
     String? sourceMessageId,
   }) async {
-    final body = await _request('POST', '/memories', body: {
-      'content': content,
-      'kind': kind,
-      if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
-        'source_message_id': sourceMessageId,
-    });
-    return _requireMemory(body);
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<MemoryRecord> createMemoryAtRevision({
+    required String content,
+    required String kind,
+    String? sourceMessageId,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
+    final body = await _request('POST', '/memories',
+        body: {
+          'content': content,
+          'kind': kind,
+          if (sourceMessageId != null && sourceMessageId.trim().isNotEmpty)
+            'source_message_id': sourceMessageId,
+        },
+        memoryRevision: expectedRevision);
+    return _requireVersionedMemory(body);
   }
 
   @override
   Future<MemoryRecord> confirmMemory(String memoryId) async {
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<MemoryRecord> confirmMemoryAtRevision(String memoryId,
+      {required int expectedRevision}) async {
+    _validateMemoryRevision(expectedRevision);
     final body = await _request(
-      'POST',
-      '/memories/${Uri.encodeComponent(memoryId)}/confirm',
-    );
-    return _requireMemory(body);
+        'POST', '/memories/${Uri.encodeComponent(memoryId)}/confirm',
+        memoryRevision: expectedRevision);
+    return _requireVersionedMemory(body);
   }
 
   @override
@@ -1300,23 +1791,43 @@ class RestApiClient
     String? content,
     bool? suppressed,
   }) async {
-    final body = await _request(
-      'PATCH',
-      '/memories/${Uri.encodeComponent(memoryId)}',
-      body: {
-        if (content != null) 'content': content,
-        if (suppressed != null) 'suppressed': suppressed,
-      },
-    );
-    return _requireMemory(body);
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<MemoryRecord> updateMemoryAtRevision(
+    String memoryId, {
+    String? content,
+    bool? suppressed,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
+    final body =
+        await _request('PATCH', '/memories/${Uri.encodeComponent(memoryId)}',
+            body: {
+              if (content != null) 'content': content,
+              if (suppressed != null) 'suppressed': suppressed,
+            },
+            memoryRevision: expectedRevision);
+    return _requireVersionedMemory(body);
   }
 
   @override
   Future<void> deleteMemory(String memoryId) async {
-    await _request(
-      'DELETE',
-      '/memories/${Uri.encodeComponent(memoryId)}',
-    );
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<void> deleteMemoryAtRevision(String memoryId,
+      {required int expectedRevision, required String idempotencyKey}) async {
+    _validateMemoryRevision(expectedRevision);
+    if (idempotencyKey.trim().isEmpty) {
+      throw const ApiException('A deletion key is required.', statusCode: 422);
+    }
+    await _request('DELETE', '/memories/${Uri.encodeComponent(memoryId)}',
+        memoryRevision: expectedRevision, idempotencyKey: idempotencyKey);
   }
 
   @override
@@ -1358,21 +1869,83 @@ class RestApiClient
     required String content,
     required List<String> memoryIds,
   }) async {
-    final body = await _request('POST', '/stories', body: {
-      'title': title,
-      'content': content,
-      'memory_ids': memoryIds,
-    });
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<StoryRecord> createStoryAtRevision({
+    required String title,
+    required String content,
+    required List<String> memoryIds,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
+    final body = await _request('POST', '/stories',
+        body: {
+          'title': title,
+          'content': content,
+          'memory_ids': memoryIds,
+        },
+        memoryRevision: expectedRevision);
     final map = mapFromJson(body);
     if (map == null) throw const ApiException('服務未回覆故事資料。');
     final story = StoryRecord.fromJson(map);
-    if (story.id.isEmpty) throw const ApiException('服務未回覆故事編號。');
+    if (story.id.isEmpty || story.revision == null) {
+      throw const ApiException('服務未回覆故事編號。');
+    }
     return story;
   }
 
   @override
+  Future<StoryRecord> updateStoryAtRevision(
+    String storyId, {
+    required String title,
+    required String content,
+    required int expectedRevision,
+  }) async {
+    _validateMemoryRevision(expectedRevision);
+    final map = mapFromJson(await _request(
+      'PATCH',
+      '/stories/${Uri.encodeComponent(storyId)}',
+      body: {'title': title, 'content': content},
+      memoryRevision: expectedRevision,
+    ));
+    final revision = map?['revision'];
+    final returnedTitle = map?['title'];
+    final returnedContent = map?['content'];
+    final memoryIds = map?['memory_ids'];
+    if (map == null ||
+        map['id'] != storyId ||
+        storyId.isEmpty ||
+        revision is! int ||
+        revision <= expectedRevision ||
+        returnedTitle is! String ||
+        returnedTitle.trim().isEmpty ||
+        returnedTitle != title.trim() ||
+        returnedContent is! String ||
+        returnedContent.trim().isEmpty ||
+        returnedContent != content.trim() ||
+        memoryIds is! List ||
+        memoryIds.any((id) => id is! String || id.isEmpty || id != id.trim()) ||
+        memoryIds.toSet().length != memoryIds.length) {
+      throw const ApiException('Invalid private card edit receipt.');
+    }
+    return StoryRecord.fromJson(map);
+  }
+
+  @override
   Future<void> deleteStory(String storyId) async {
-    await _request('DELETE', '/stories/${Uri.encodeComponent(storyId)}');
+    throw const ApiException('A captured memory revision is required.',
+        statusCode: 422);
+  }
+
+  @override
+  Future<void> deleteStoryAtRevision(String storyId,
+      {required int expectedRevision}) async {
+    _validateMemoryRevision(expectedRevision);
+    await _request('DELETE', '/stories/${Uri.encodeComponent(storyId)}',
+        memoryRevision: expectedRevision);
   }
 
   @override
@@ -1419,7 +1992,14 @@ class RestApiClient
     required String content,
     required String clientMessageId,
     String? sourceStoryId,
+    String? familyLinkId,
+    int? expectedAuthorizationEpoch,
   }) async {
+    _validateFamilyPreview(familyLinkId, expectedAuthorizationEpoch);
+    if (sourceStoryId != null && sourceStoryId.trim().isNotEmpty) {
+      throw const ApiException('A captured memory revision is required.',
+          statusCode: 422);
+    }
     final body = await _request(
       'POST',
       '/family-messages',
@@ -1427,6 +2007,8 @@ class RestApiClient
         'recipient_id': recipientId,
         'content': content,
         'client_message_id': clientMessageId,
+        'family_link_id': familyLinkId,
+        'expected_authorization_epoch': expectedAuthorizationEpoch,
         if (sourceStoryId != null && sourceStoryId.trim().isNotEmpty)
           'source_story_id': sourceStoryId,
       },
@@ -1437,6 +2019,124 @@ class RestApiClient
     final message = FamilyMessage.fromJson(map);
     if (message.id.isEmpty) throw const ApiException('服務未回覆家庭訊息編號。');
     return message;
+  }
+
+  @override
+  Future<FamilyMessage> sendFamilyMessageAtRevision({
+    required String recipientId,
+    required String content,
+    required String clientMessageId,
+    required String sourceStoryId,
+    required int expectedRevision,
+    String? familyLinkId,
+    int? expectedAuthorizationEpoch,
+  }) async {
+    _validateFamilyPreview(familyLinkId, expectedAuthorizationEpoch);
+    _validateMemoryRevision(expectedRevision);
+    final body = await _request(
+      'POST',
+      '/family-messages',
+      body: {
+        'recipient_id': recipientId,
+        'content': content,
+        'client_message_id': clientMessageId,
+        'family_link_id': familyLinkId,
+        'expected_authorization_epoch': expectedAuthorizationEpoch,
+        if (sourceStoryId.trim().isNotEmpty) 'source_story_id': sourceStoryId,
+      },
+      idempotencyKey: clientMessageId,
+      memoryRevision: expectedRevision,
+    );
+    final map = mapFromJson(body);
+    if (map == null) throw const ApiException('服務未回覆家庭訊息。');
+    final message = FamilyMessage.fromJson(map);
+    if (message.id.isEmpty) throw const ApiException('服務未回覆家庭訊息編號。');
+    return message;
+  }
+
+  @override
+  Future<FamilyMessage> sendFamilyMessageForPreview({
+    required String recipientId,
+    required String content,
+    required String clientMessageId,
+    required String familyLinkId,
+    required int expectedAuthorizationEpoch,
+    String? sourceStoryId,
+    int? expectedRevision,
+  }) async {
+    _validateFamilyPreview(familyLinkId, expectedAuthorizationEpoch);
+    if (sourceStoryId != null) {
+      if (expectedRevision == null) {
+        throw const ApiException('A captured memory revision is required.',
+            statusCode: 422);
+      }
+      return sendFamilyMessageAtRevision(
+        recipientId: recipientId,
+        content: content,
+        clientMessageId: clientMessageId,
+        familyLinkId: familyLinkId,
+        expectedAuthorizationEpoch: expectedAuthorizationEpoch,
+        sourceStoryId: sourceStoryId,
+        expectedRevision: expectedRevision,
+      );
+    }
+    return sendFamilyMessage(
+      recipientId: recipientId,
+      content: content,
+      clientMessageId: clientMessageId,
+      familyLinkId: familyLinkId,
+      expectedAuthorizationEpoch: expectedAuthorizationEpoch,
+    );
+  }
+
+  void _validateFamilyPreview(
+      String? familyLinkId, int? expectedAuthorizationEpoch) {
+    if (familyLinkId == null ||
+        familyLinkId.trim().isEmpty ||
+        expectedAuthorizationEpoch == null ||
+        expectedAuthorizationEpoch < 1) {
+      throw const ApiException(
+          'A captured family connection and authorization epoch are required.',
+          statusCode: 422);
+    }
+  }
+
+  @override
+  Future<MemoryControlState> getMemoryControlState() async =>
+      _parseControlState(
+          mapFromJson(await _request('GET', '/memories/control-state')));
+
+  @override
+  Future<MemoryDeletionReceipt> deleteMemories(
+      {required String mode,
+      List<String> memoryIds = const [],
+      required int expectedRevision,
+      required String idempotencyKey}) async {
+    _validateMemoryRevision(expectedRevision);
+    if ((mode != 'all' && mode != 'selected') ||
+        idempotencyKey.trim().isEmpty ||
+        (mode == 'selected' && memoryIds.isEmpty) ||
+        (mode == 'all' && memoryIds.isNotEmpty)) {
+      throw const ApiException('Invalid memory deletion request.',
+          statusCode: 422);
+    }
+    final map =
+        mapFromJson(await _request('POST', '/memories/deletions', body: {
+      'mode': mode,
+      'memory_ids': memoryIds,
+      'expected_revision': expectedRevision,
+      'idempotency_key': idempotencyKey
+    }));
+    try {
+      final receipt = MemoryDeletionReceipt.fromJson(map ?? const {});
+      if (receipt.revision <= expectedRevision) {
+        throw const ApiException(
+            'The deletion receipt did not advance the captured revision.');
+      }
+      return receipt;
+    } on FormatException {
+      throw const ApiException('Invalid memory deletion receipt.');
+    }
   }
 }
 
@@ -1457,6 +2157,22 @@ bool? _demoModeValue(Object? value) {
   return null;
 }
 
+TaskShare _requireTaskShare(Object? body) {
+  final map = mapFromJson(body);
+  if (map == null) {
+    throw const ApiException('A task sharing receipt was not returned.');
+  }
+  final share = TaskShare.fromJson(map);
+  if (share.id.isEmpty ||
+      share.taskId.isEmpty ||
+      share.familyLinkId.isEmpty ||
+      share.sharedBy.isEmpty ||
+      share.contentHash.isEmpty) {
+    throw const ApiException('A valid task sharing receipt was not returned.');
+  }
+  return share;
+}
+
 MemoryRecord _requireMemory(Object? body) {
   final map = mapFromJson(body);
   if (map == null) throw const ApiException('服務未回覆記憶資料。');
@@ -1472,4 +2188,26 @@ String? _stringValue(Map<String, dynamic> map, List<String> keys) {
     if (value is num || value is bool) return value.toString();
   }
   return null;
+}
+
+void _validateMemoryRevision(int revision) {
+  if (revision < 0) {
+    throw const ApiException('Invalid memory revision.', statusCode: 422);
+  }
+}
+
+MemoryControlState _parseControlState(Map<String, dynamic>? map) {
+  try {
+    return MemoryControlState.fromJson(map ?? const {});
+  } on FormatException {
+    throw const ApiException('Invalid memory control state.');
+  }
+}
+
+MemoryRecord _requireVersionedMemory(Object? body) {
+  final memory = _requireMemory(body);
+  if (memory.revision == null) {
+    throw const ApiException('Missing memory revision.');
+  }
+  return memory;
 }

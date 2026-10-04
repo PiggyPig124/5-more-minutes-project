@@ -225,7 +225,7 @@ async def send_message(
     owner_id = account.id
     urgent_risk = detect_urgent_risk(payload.content)
     memory_enabled = account.role == "elder" and not urgent_risk and memory_consent_enabled(db, owner_id)
-    context_revision = memory_revision(db, owner_id) if memory_enabled else 0
+    context_revision = memory_revision(db, owner_id)
     conversation = get_owned_conversation(db, account, conversation_id)
     if payload.client_message_id:
         existing = db.scalar(
@@ -311,10 +311,10 @@ async def send_message(
     # write section now, rechecking the client key in case another request
     # completed the same message while the provider was running.
     db.rollback()
-    conversation = _lock_conversation_for_write(db, conversation_id, owner_id)
+    conversation = await run_in_threadpool(_lock_conversation_for_write, db, conversation_id, owner_id)
     if memory_enabled and not memory_consent_enabled(db, owner_id):
         raise HTTPException(409, "記憶授權已關閉，請重試。")
-    if memory_enabled and memory_revision(db, owner_id) != context_revision:
+    if memory_revision(db, owner_id) != context_revision:
         raise HTTPException(409, "記憶資料已更新，請重試以使用最新內容。")
     # A memory may have been withdrawn while a remote model was answering.
     # Reject that stale answer instead of resurrecting its text in history.
@@ -377,6 +377,7 @@ async def send_message(
             "memory_sources": context["memory_sources"],
             "memory_retrieval_mode": memory_result["retrieval_mode"],
             "resource_sources": resource_result["items"],
+            "resource_source_bindings": resource_result.get("source_bindings", []),
             "resource_retrieval_mode": resource_result["retrieval_mode"],
             "resource_conflicts": resource_result["conflicts"],
             "source_memory_ids": sorted({
@@ -439,6 +440,13 @@ async def send_message(
             if memory_enabled and account.role == "elder"
             else {"saved": [], "suggestion": None, "forgotten_ids": []}
         )
+        # Capture after every model-authored mutation so a displayed suggestion
+        # keeps the version the owner actually reviewed, including same-turn saves.
+        final_memory_revision = memory_revision(db, owner_id)
+        assistant_message.metadata_json = {
+            **dict(assistant_message.metadata_json or {}),
+            "memory_revision": final_memory_revision,
+        }
         saved_memories = memory_result["saved"]
         if saved_memories:
             assistant_message.metadata_json = {
@@ -450,7 +458,9 @@ async def send_message(
         if memory_result.get("suggestion") is not None:
             assistant_message.metadata_json = {
                 **dict(assistant_message.metadata_json or {}),
-                "memory_suggestion": jsonable_encoder(memory_result["suggestion"]),
+                "memory_suggestion": jsonable_encoder({
+                    **memory_result["suggestion"], "revision": final_memory_revision,
+                }),
             }
         if community_prompt is not None:
             assistant_message.metadata_json = {

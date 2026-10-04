@@ -1,4 +1,5 @@
 """Cross-feature regressions for the merged application."""
+from .memory_revision_helpers import memory_revision_headers
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -108,7 +109,7 @@ def test_catalog_consent_skill_confirmation_and_interest(setup):
     headers = _headers(elder)
     elder_id = elder['account']['id']
     with app.state.session_factory() as db:
-        memory = PersonalMemory(owner_id=elder_id, content='I can do calligraphy', kind='fact', status='confirmed')
+        memory = PersonalMemory(owner_id=elder_id, content='calligraphy', kind='fact', status='confirmed')
         db.add(memory); db.flush()
         activity = CommunityActivity(id='integration-calligraphy', title='Calligraphy', description='Class',
             organizer='Test', district='Test', skill_tags=['calligraphy'], verified=True)
@@ -121,7 +122,9 @@ def test_catalog_consent_skill_confirmation_and_interest(setup):
     assert 'integration-calligraphy' not in [a['id'] for a in result['recommendations']]
     with app.state.session_factory() as db:
         db.get(CommunitySkill, skill.id).status='confirmed'; db.commit()
-    assert client.get('/community/catalog/recommendations', headers=headers).json()['recommendations'][0]['id'] == activity.id
+    matched = next(row for row in client.get('/community/catalog/recommendations', headers=headers).json()['recommendations'] if row['id'] == activity.id)
+    assert matched['recommendation_basis'] == 'memory'
+    assert matched['recommendation_reasons'] == [{'memory_id': memory.id, 'source_type': 'skill', 'source_text': 'calligraphy', 'matched_tag': 'calligraphy'}]
     assert client.post(f'/community/catalog/interest/{activity.id}', headers=headers).status_code == 201
     assert client.get('/community/catalog/interests', headers=_headers(other)).json()['count'] == 0
     assert client.delete(f'/community/catalog/interest/{activity.id}', headers=headers).status_code == 200
@@ -190,7 +193,7 @@ def test_memory_deletion_scrubs_checkin_and_inbox(setup, monkeypatch):
         clock.combine.side_effect = datetime.combine
         assert client.post('/check-ins/trigger', headers=headers, json={}).json()['triggered'] is True
     assert 'jasmine' in client.get('/notifications', headers=headers).json()['notifications'][0]['body']
-    assert client.delete(f'/memories/{memory.id}', headers=headers).status_code in (200, 204)
+    assert client.delete(f'/memories/{memory.id}', headers=memory_revision_headers(client, headers, idempotency_key='test_hamza_integration-193-delete')).status_code in (200, 204)
     assert 'jasmine' not in client.get('/notifications', headers=headers).json()['notifications'][0]['body']
 
 
@@ -198,7 +201,7 @@ def test_urgent_intervention_skips_memory_provider(setup, monkeypatch):
     import app.routers.conversations as conversations
     app, client, elder, *_ = setup
     headers = _headers(elder)
-    client.put('/memories/consent', headers=headers, json={'enabled': True})
+    client.put('/memories/consent', headers=memory_revision_headers(client, headers), json={'enabled': True})
 
     async def must_not_call(*args, **kwargs):
         raise AssertionError('Urgent intervention must not wait for retrieval')

@@ -181,3 +181,16 @@ class StoryMemoryLink(Base):
 # Friendly aliases for code that calls the entity a memory rather than a
 # personal memory. The table name remains explicit in migrations and queries.
 Memory = PersonalMemory
+
+
+class MemoryDeletionReceipt(Base):
+    """Minimal owner/key-scoped deletion receipt; contains no deleted body."""
+    __tablename__ = "memory_deletion_receipts"
+    __table_args__ = (UniqueConstraint("owner_id", "key_hash", name="uq_memory_deletion_owner_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_memory_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision: Mapped[int] = mapped_column(nullable=False)
+    counts: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

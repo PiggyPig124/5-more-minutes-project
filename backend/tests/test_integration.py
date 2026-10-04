@@ -327,7 +327,14 @@ def test_family_scope_and_revoke_are_enforced(tmp_path: Path) -> None:
         ).json()
         client.post(f"/actions/{proposed['action']['id']}/confirm", headers=_headers(elder), json={})
         visible = client.get("/tasks", headers=_headers(caregiver))
-        assert visible.status_code == 200 and len(visible.json()) == 1
+        assert visible.status_code == 200 and visible.json() == []
+        owned = client.get("/tasks", headers=_headers(elder)).json()[0]
+        shared = client.post(f"/tasks/{owned['id']}/shares", headers=_headers(elder), json={
+            "family_link_id": link_id, "expected_content_hash": owned["content_hash"],
+            "idempotency_key": "scope-explicit-consent"})
+        assert shared.status_code == 201, shared.text
+        visible = client.get("/tasks", headers=_headers(caregiver))
+        assert len(visible.json()) == 1 and visible.json()[0]["access_mode"] == "shared_readonly"
         private = client.get(f"/conversations/{conversation['id']}", headers=_headers(caregiver))
         assert private.status_code == 403
         revoked = client.post(f"/family-links/{link_id}/revoke", headers=_headers(elder))

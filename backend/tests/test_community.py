@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .memory_revision_helpers import memory_revision_headers
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -111,20 +112,20 @@ def test_browse_empty_catalog_and_personal_skill_consent_boundary(tmp_path: Path
         assert curated["items"] == []
         assert curated["search_state"] == "unavailable"
         headers = _headers(elder)
-        assert client.get("/community/skills/suggestions", headers=headers).status_code == 403
-        assert client.get("/community/skills/suggestions", headers=_headers(caregiver)).status_code == 403
+        assert client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers)).status_code == 403
+        assert client.get("/community/skills/suggestions", headers={**_headers(caregiver), 'X-Memory-Revision': '0'}).status_code == 403
 
-        enabled = client.put("/memories/consent", headers=headers, json={"enabled": True})
+        enabled = client.put("/memories/consent", headers=memory_revision_headers(client, headers), json={"enabled": True})
         assert enabled.status_code == 200
         candidate = client.post(
-            "/memories", headers=headers, json={"content": "I was a tailor and taught sewing."}
+            "/memories", headers=memory_revision_headers(client, headers), json={"content": "I was a tailor and taught sewing."}
         )
         assert candidate.status_code == 201
         memory_id = candidate.json()["id"]
-        assert client.get("/community/skills/suggestions", headers=headers).json()["items"] == []
-        assert client.post(f"/memories/{memory_id}/confirm", headers=headers).status_code == 200
+        assert client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers)).json()["items"] == []
+        assert client.post(f"/memories/{memory_id}/confirm", headers=memory_revision_headers(client, headers)).status_code == 200
 
-        suggestions = client.get("/community/skills/suggestions", headers=headers)
+        suggestions = client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers))
         assert suggestions.status_code == 200
         skill = suggestions.json()["items"][0]
         assert skill["suggestion"] == "Tailoring and basic sewing"
@@ -134,11 +135,11 @@ def test_browse_empty_catalog_and_personal_skill_consent_boundary(tmp_path: Path
         ).status_code == 409
 
         rejected = client.post(
-            f"/community/skills/{skill['id']}/decision", headers=headers, json={"decision": "reject"}
+            f"/community/skills/{skill['id']}/decision", headers=memory_revision_headers(client, headers), json={"decision": "reject"}
         )
         assert rejected.status_code == 200
         assert rejected.json()["status"] == "rejected"
-        assert client.get("/community/skills/suggestions", headers=headers).json()["items"] == []
+        assert client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers)).json()["items"] == []
 
 
 def test_skill_requires_owner_confirmation_and_active_source_memory(tmp_path: Path) -> None:
@@ -148,25 +149,25 @@ def test_skill_requires_owner_confirmation_and_active_source_memory(tmp_path: Pa
         owner = _register(client, "skill-owner@example.test")
         other = _register(client, "skill-other@example.test")
         headers = _headers(owner)
-        client.put("/memories/consent", headers=headers, json={"enabled": True})
+        client.put("/memories/consent", headers=memory_revision_headers(client, headers), json={"enabled": True})
         other_headers = _headers(other)
-        client.put("/memories/consent", headers=other_headers, json={"enabled": True})
-        created = client.post("/memories", headers=headers, json={"content": "I spent years gardening."})
+        client.put("/memories/consent", headers=memory_revision_headers(client, other_headers), json={"enabled": True})
+        created = client.post("/memories", headers=memory_revision_headers(client, headers), json={"content": "I spent years gardening."})
         memory_id = created.json()["id"]
-        client.post(f"/memories/{memory_id}/confirm", headers=headers)
-        skill = client.get("/community/skills/suggestions", headers=headers).json()["items"][0]
+        client.post(f"/memories/{memory_id}/confirm", headers=memory_revision_headers(client, headers))
+        skill = client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers)).json()["items"][0]
 
         assert client.post(
             f"/community/skills/{skill['id']}/decision",
-            headers=other_headers,
+            headers=memory_revision_headers(client, other_headers),
             json={"decision": "confirm"},
         ).status_code in {403, 404}
         assert client.post(
             f"/community/skills/{skill['id']}/decision",
-            headers=headers,
+            headers=memory_revision_headers(client, headers),
             json={"decision": "edit", "skill": "Community gardening"},
         ).json()["status"] == "confirmed"
-        refreshed = client.get("/community/skills/suggestions", headers=headers)
+        refreshed = client.get("/community/skills/suggestions", headers=memory_revision_headers(client, headers))
         assert len(refreshed.json()["items"]) == 1
         assert refreshed.json()["items"][0]["suggestion"] == "Community gardening"
         no_matches = client.get(
@@ -176,16 +177,16 @@ def test_skill_requires_owner_confirmation_and_active_source_memory(tmp_path: Pa
         assert no_matches.json()["no_results"] is True
 
         # Consent withdrawal immediately blocks memory-linked matching.
-        client.put("/memories/consent", headers=headers, json={"enabled": False})
+        client.put("/memories/consent", headers=memory_revision_headers(client, headers), json={"enabled": False})
         assert client.get(
             "/community/opportunities", headers=headers, params={"skill_id": skill["id"]}
         ).status_code == 403
         suppressed = client.patch(
-            f"/memories/{memory_id}", headers=headers, json={"suppressed": True}
+            f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"suppressed": True}
         )
         assert suppressed.status_code == 200
         with app.state.session_factory() as db:
             assert db.get(CommunitySkill, skill["id"]) is None
-        assert client.delete(f"/memories/{memory_id}", headers=headers).status_code == 204
+        assert client.delete(f"/memories/{memory_id}", headers=memory_revision_headers(client, headers, idempotency_key='test_community-189-delete')).status_code == 204
         with app.state.session_factory() as db:
             assert db.get(PersonalMemory, memory_id) is None

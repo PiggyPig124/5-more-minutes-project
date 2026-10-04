@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -47,6 +47,7 @@ class CommunityInterest(Base):
     """An elder's expressed interest in a community activity."""
 
     __tablename__ = "community_interests"
+    __table_args__ = (Index("uq_community_interest_pair", "elder_id", "activity_id", unique=True),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     elder_id: Mapped[str] = mapped_column(

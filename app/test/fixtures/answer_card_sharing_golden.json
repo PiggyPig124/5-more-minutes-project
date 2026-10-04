@@ -1,0 +1,153 @@
+{
+  "contract_version": 2,
+  "share_request": {
+    "expected_version": 1,
+    "previewed_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+    "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+    "expected_link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+    "expected_link_epoch": 1,
+    "client_share_id": "share-one",
+    "personal_review_ack": true
+  },
+  "share": {
+    "card_version": 1,
+    "public_payload": {
+      "title": "Private saved answer",
+      "selected_sections": [
+        "Useful public explanation"
+      ],
+      "official_terms": [],
+      "missing_information": [],
+      "next_steps": [],
+      "public_sources": [],
+      "verification_state": "no_verified_source",
+      "verification_scope": "AI answer is not independently verified. Sources are references only."
+    },
+    "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+    "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+    "mode": "assistant_answer",
+    "sender_id": "252f2470-81b9-49da-b938-a47f47294e37",
+    "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+    "link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+    "link_epoch": 1,
+    "created_at": "2026-10-04T04:34:36.797580Z"
+  },
+  "inbox": [
+    {
+      "card_version": 1,
+      "public_payload": {
+        "title": "Private saved answer",
+        "selected_sections": [
+          "Useful public explanation"
+        ],
+        "official_terms": [],
+        "missing_information": [],
+        "next_steps": [],
+        "public_sources": [],
+        "verification_state": "no_verified_source",
+        "verification_scope": "AI answer is not independently verified. Sources are references only."
+      },
+      "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+      "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+      "mode": "assistant_answer",
+      "sender_id": "252f2470-81b9-49da-b938-a47f47294e37",
+      "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+      "link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+      "link_epoch": 1,
+      "created_at": "2026-10-04T04:34:36.797580Z"
+    }
+  ],
+  "sent": [
+    {
+      "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+      "mode": "assistant_answer",
+      "card_id": "688cdba1-c05b-4507-93dd-458119b792bf",
+      "card_version": 1,
+      "sender_id": "252f2470-81b9-49da-b938-a47f47294e37",
+      "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+      "link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+      "link_epoch": 1,
+      "public_payload": {
+        "title": "Private saved answer",
+        "selected_sections": [
+          "Useful public explanation"
+        ],
+        "official_terms": [],
+        "missing_information": [],
+        "next_steps": [],
+        "public_sources": [],
+        "verification_state": "no_verified_source",
+        "verification_scope": "AI answer is not independently verified. Sources are references only."
+      },
+      "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+      "created_at": "2026-10-04T04:34:36.797580Z",
+      "access_revoked_at": null,
+      "access_revocation_reason": null
+    }
+  ],
+  "export_preview": {
+    "card_version": 1,
+    "public_payload": {
+      "title": "Private saved answer",
+      "selected_sections": [
+        "Useful public explanation"
+      ],
+      "official_terms": [],
+      "missing_information": [],
+      "next_steps": [],
+      "public_sources": [],
+      "verification_state": "no_verified_source",
+      "verification_scope": "AI answer is not independently verified. Sources are references only."
+    },
+    "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d"
+  },
+  "revoke": {
+    "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+    "revoked": true
+  },
+  "revoked_sent": [
+    {
+      "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+      "mode": "assistant_answer",
+      "card_id": "688cdba1-c05b-4507-93dd-458119b792bf",
+      "card_version": 1,
+      "sender_id": "252f2470-81b9-49da-b938-a47f47294e37",
+      "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+      "link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+      "link_epoch": 1,
+      "public_payload": {
+        "title": "Private saved answer",
+        "selected_sections": [
+          "Useful public explanation"
+        ],
+        "official_terms": [],
+        "missing_information": [],
+        "next_steps": [],
+        "public_sources": [],
+        "verification_state": "no_verified_source",
+        "verification_scope": "AI answer is not independently verified. Sources are references only."
+      },
+      "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+      "created_at": "2026-10-04T04:34:36.797580Z",
+      "access_revoked_at": "2026-10-04T04:34:36.813151Z",
+      "access_revocation_reason": "sender_revoked"
+    }
+  ],
+  "deleted_sent": [
+    {
+      "id": "0aacc3ad-7eb7-4c0e-839b-ac3934a27a85",
+      "mode": "assistant_answer",
+      "card_id": "688cdba1-c05b-4507-93dd-458119b792bf",
+      "card_version": 1,
+      "sender_id": "252f2470-81b9-49da-b938-a47f47294e37",
+      "recipient_id": "ba45d9ef-3ad6-49cd-a030-047b0241c7e4",
+      "link_id": "a78268fa-6489-45ff-95ba-b656e59c4293",
+      "link_epoch": 1,
+      "public_payload": null,
+      "public_payload_hash": "023f83429b544f0258d84fbe8895dd2d049ed7eb784bb28d24ad98940e20710d",
+      "created_at": "2026-10-04T04:34:36.797580Z",
+      "access_revoked_at": "2026-10-04T04:34:36.813151Z",
+      "access_revocation_reason": "sender_revoked"
+    }
+  ]
+}

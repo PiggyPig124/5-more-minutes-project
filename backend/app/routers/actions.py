@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..memory_service import lock_owner_account
 from ..dependencies import get_current_account
 from ..models import Account, ActionProposal, Task
 from ..schemas import ActionDecisionOut, ActionDecisionRequest, ActionOut, TaskOut
@@ -70,18 +71,6 @@ def _get_owned_action(db: Session, action_id: str, account: Account) -> ActionPr
     return action
 
 
-def _begin_decision_transaction(db: Session) -> None:
-    """Start a write-serialized decision transaction on SQLite.
-
-    PostgreSQL honors ``SELECT ... FOR UPDATE`` below. SQLite parses that
-    clause as a normal select, so ``BEGIN IMMEDIATE`` prevents a concurrent
-    confirm and dismiss from both observing the same pending proposal.
-    """
-
-    if db.bind is not None and db.bind.dialect.name == "sqlite":
-        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
-
-
 @router.post("/{action_id}/confirm", response_model=ActionDecisionOut)
 def confirm_action(
     action_id: str,
@@ -98,8 +87,8 @@ def confirm_action(
 
     # The authentication dependency may have opened a read transaction. End it
     # before starting the explicit mutation transaction below.
-    db.rollback()
-    _begin_decision_transaction(db)
+    # Keep the same owner -> action lock order as memory withdrawal.
+    lock_owner_account(db, account.id)
     action = db.scalar(select(ActionProposal).where(ActionProposal.id == action_id).with_for_update())
     if action is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action proposal not found")
@@ -109,6 +98,8 @@ def confirm_action(
     idempotency_key = payload.idempotency_key if payload else None
     if action.confirmation_key and idempotency_key and action.confirmation_key != idempotency_key:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Action was already confirmed with another key")
+    if action.status == "invalidated":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The source memory was withdrawn; this action is no longer available")
     if action.status == "dismissed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dismissed actions cannot be confirmed")
     if action.status == "failed":
@@ -158,13 +149,15 @@ def dismiss_action(
     account: Account = Depends(get_current_account),
     db: Session = Depends(get_db),
 ) -> ActionOut:
-    db.rollback()
-    _begin_decision_transaction(db)
+    # Keep the same owner -> action lock order as memory withdrawal.
+    lock_owner_account(db, account.id)
     action = db.scalar(select(ActionProposal).where(ActionProposal.id == action_id).with_for_update())
     if action is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action proposal not found")
     if action.owner_id != account.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the action owner can decide")
+    if action.status == "invalidated":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The source memory was withdrawn; this action is no longer available")
     if action.status == "executed":
         return _action_out(action)
     if action.status != "dismissed":

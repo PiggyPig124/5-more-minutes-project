@@ -156,6 +156,15 @@ void main() {
       () async {
     final requests = <http.Request>[];
     final client = MockClient((request) async {
+      if (request.url.path == '/memories/control-state') {
+        return http.Response(
+            jsonEncode({
+              'enabled': true,
+              'revision': 0,
+              'counts': {'total': 0, 'current': 0}
+            }),
+            200);
+      }
       requests.add(request);
       if (request.method == 'POST' && request.url.path.endsWith('/memories')) {
         return http.Response(
@@ -163,7 +172,8 @@ void main() {
             'id': 'memory-1',
             'content': '我喜歡飲茶',
             'kind': 'conversation',
-            'status': 'candidate'
+            'status': 'candidate',
+            'revision': 1
           }),
           201,
           headers: {'content-type': 'application/json'},
@@ -174,7 +184,8 @@ void main() {
           'id': 'memory-2',
           'content': '我喜歡飲茶',
           'kind': 'conversation',
-          'status': 'confirmed'
+          'status': 'confirmed',
+          'revision': 2
         }),
         200,
         headers: {'content-type': 'application/json'},
@@ -182,9 +193,16 @@ void main() {
     });
     final api = RestApiClient(
         origin: 'http://localhost:8012', client: client, accessToken: 'token');
-    final candidate = await api.createMemory(
-        content: '我喜歡飲茶', kind: 'conversation', sourceMessageId: 'message-4');
-    final confirmed = await api.confirmMemory(candidate.id);
+    final snapshot = await api.getMemoryControlState();
+    final candidate = await api.createMemoryAtRevision(
+        expectedRevision: snapshot.revision,
+        content: '我喜歡飲茶',
+        kind: 'conversation',
+        sourceMessageId: 'message-4');
+    final confirmed = await api.confirmMemoryAtRevision(candidate.id,
+        expectedRevision: candidate.revision!);
+    expect(requests.first.headers['X-Memory-Revision'], '0');
+    expect(requests.last.headers['X-Memory-Revision'], '1');
     expect(candidate.status, 'candidate');
     expect(confirmed.status, 'confirmed');
     expect(jsonDecode(requests.first.body), {
@@ -202,6 +220,15 @@ void main() {
     late http.Request familyRequest;
     var familyCall = 0;
     final client = MockClient((request) async {
+      if (request.url.path == '/memories/control-state') {
+        return http.Response(
+            jsonEncode({
+              'enabled': true,
+              'revision': 7,
+              'counts': {'total': 1, 'current': 1}
+            }),
+            200);
+      }
       if (request.url.path.endsWith('/resources/search')) {
         resourceRequest = request;
         return http.Response(
@@ -242,7 +269,11 @@ void main() {
     final api = RestApiClient(
         origin: 'http://localhost:8012', client: client, accessToken: 'token');
     final resources = await api.searchResources(query: '交通', limit: 4);
-    final message = await api.sendFamilyMessage(
+    final snapshot = await api.getMemoryControlState();
+    final message = await api.sendFamilyMessageAtRevision(
+        familyLinkId: 'captured-link',
+        expectedAuthorizationEpoch: 3,
+        expectedRevision: snapshot.revision,
         recipientId: 'caregiver-1',
         content: '今日食飯嗎？',
         clientMessageId: 'family-op-1',
@@ -254,10 +285,13 @@ void main() {
     expect(jsonDecode(resourceRequest.body), {'query': '交通', 'limit': 4});
     expect(message.sourceStoryId, 'story-1');
     expect(familyCall, 1);
+    expect(familyRequest.headers['X-Memory-Revision'], '7');
     expect(jsonDecode(familyRequest.body), {
       'recipient_id': 'caregiver-1',
       'content': '今日食飯嗎？',
       'client_message_id': 'family-op-1',
+      'family_link_id': 'captured-link',
+      'expected_authorization_epoch': 3,
       'source_story_id': 'story-1',
     });
     expect(familyRequest.headers['Idempotency-Key'], 'family-op-1');

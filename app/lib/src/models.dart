@@ -1,3 +1,4 @@
+export 'family_connection_models.dart';
 import 'dart:convert';
 
 enum UserRole {
@@ -170,6 +171,8 @@ class ChatMessage {
         'candidateMemoryId',
       ]);
 
+  int? get memoryRevision => _memoryRevision(metadata['memory_revision']);
+
   MemorySuggestion? get memorySuggestion {
     final suggestion = _map(metadata['memory_suggestion']);
     return suggestion == null ? null : MemorySuggestion.fromJson(suggestion);
@@ -199,6 +202,8 @@ class ChatMessage {
             sender?.toLowerCase() == 'me');
     final resolvedMetadata = <String, dynamic>{
       ...?_map(json['metadata_json'] ?? json['metadata']),
+      if (json['memory_revision'] != null)
+        'memory_revision': json['memory_revision'],
       if (json['retrieval_mode'] != null)
         'retrieval_mode': json['retrieval_mode'],
       if (json['memory_retrieval_mode'] != null)
@@ -230,10 +235,12 @@ class MemorySuggestion {
   const MemorySuggestion(
       {required this.content,
       required this.kind,
+      this.revision,
       this.sourceMessageId,
       this.topicKey,
       this.sensitivity = 'ordinary',
       this.requiresConfirmation = true});
+  final int? revision;
   final String content;
   final String kind;
   final String? sourceMessageId;
@@ -242,6 +249,7 @@ class MemorySuggestion {
   final bool requiresConfirmation;
   factory MemorySuggestion.fromJson(Map<String, dynamic> json) =>
       MemorySuggestion(
+        revision: _memoryRevision(json['revision']),
         content: _string(json, const ['content']) ?? '',
         kind: _string(json, const ['kind']) ?? 'fact',
         sourceMessageId: _string(json, const ['source_message_id']),
@@ -319,7 +327,13 @@ class CareTask {
     required this.description,
     required this.status,
     this.dueAt,
-    this.isShared = true,
+    this.isShared = false,
+    this.ownerId,
+    this.ownerDisplayName,
+    this.taskType = 'task',
+    this.contentHash,
+    this.accessMode,
+    this.shareId,
   });
 
   final String id;
@@ -328,6 +342,15 @@ class CareTask {
   final TaskStatus status;
   final DateTime? dueAt;
   final bool isShared;
+  final String? ownerId;
+  final String? ownerDisplayName;
+  final String taskType;
+  final String? contentHash;
+  final String? accessMode;
+  final String? shareId;
+
+  bool get isReadOnly =>
+      accessMode == 'shared_readonly' || (accessMode == null && isShared);
 
   factory CareTask.fromJson(Map<String, dynamic> json) {
     return CareTask(
@@ -336,10 +359,62 @@ class CareTask {
       description:
           _string(json, const ['description', 'details', 'content']) ?? '',
       status: TaskStatus.fromJson(json['status']),
-      dueAt: _date(json, const ['due_at', 'dueAt', 'scheduled_for']),
-      isShared: _bool(json, const ['is_shared', 'shared']) ?? true,
+      dueAt: _taskInstant(json, const ['due_at', 'dueAt', 'scheduled_for']),
+      isShared: json['access_mode'] == 'shared_readonly' ||
+          (_bool(json, const ['is_shared', 'shared']) ?? false),
+      ownerId: _string(json, const ['owner_id']),
+      ownerDisplayName: _string(json, const ['owner_display_name']),
+      taskType: _string(json, const ['task_type']) ?? 'task',
+      contentHash: _string(json, const ['content_hash']),
+      accessMode: _string(json, const ['access_mode']),
+      shareId: _string(json, const ['share_id']),
     );
   }
+}
+
+class TaskShare {
+  const TaskShare({
+    required this.id,
+    required this.taskId,
+    required this.familyLinkId,
+    required this.sharedBy,
+    required this.contentHash,
+    this.consentedAt,
+    this.revokedAt,
+    this.revocationReason,
+    this.caregiverId,
+    this.caregiverName = '',
+    this.caregiverEmail = '',
+  });
+
+  final String id;
+  final String taskId;
+  final String familyLinkId;
+  final String sharedBy;
+  final String contentHash;
+  final DateTime? consentedAt;
+  final DateTime? revokedAt;
+  final String? revocationReason;
+  final String? caregiverId;
+  final String caregiverName;
+  final String caregiverEmail;
+
+  bool get isActive =>
+      id.isNotEmpty && revokedAt == null && revocationReason == null;
+
+  factory TaskShare.fromJson(Map<String, dynamic> json) => TaskShare(
+        id: _string(json, const ['id']) ?? '',
+        taskId: _string(json, const ['task_id']) ?? '',
+        familyLinkId: _string(json, const ['family_link_id']) ?? '',
+        sharedBy: _string(json, const ['shared_by']) ?? '',
+        contentHash: _string(json, const ['content_hash']) ?? '',
+        consentedAt: _taskInstant(json, const ['consented_at']),
+        revokedAt: _taskInstant(json, const ['revoked_at']),
+        revocationReason: _string(json, const ['revocation_reason']),
+        caregiverId: _string(json, const ['caregiver_id']),
+        caregiverName: _string(json, const ['caregiver_name']) ?? '',
+        caregiverEmail: _string(json, const ['caregiver_email']) ?? '',
+      );
 }
 
 enum ActionKind {
@@ -479,6 +554,9 @@ class FamilyInvitation {
     this.caregiverId,
     this.elderName,
     this.caregiverName,
+    this.elderEmail,
+    this.caregiverEmail,
+    this.authorizationEpoch = 1,
   });
 
   final String id;
@@ -492,6 +570,20 @@ class FamilyInvitation {
   final String? caregiverId;
   final String? elderName;
   final String? caregiverName;
+  final String? elderEmail;
+  final String? caregiverEmail;
+  final int? authorizationEpoch;
+
+  bool get actionable =>
+      id.trim().isNotEmpty &&
+      (elderId?.trim().isNotEmpty ?? false) &&
+      (caregiverId?.trim().isNotEmpty ?? false) &&
+      authorizationEpoch != null &&
+      authorizationEpoch! >= 1 &&
+      status == InvitationStatus.accepted &&
+      scopes.isNotEmpty &&
+      scopes.every(
+          (scope) => scope == 'care_tasks' || scope == 'family_messages');
 
   bool get allowsFamilyMessages => scopes.contains('family_messages');
 
@@ -500,7 +592,7 @@ class FamilyInvitation {
     final caregiver = _map(json['caregiver']);
     final counterpart = caregiver ?? elder;
     return FamilyInvitation(
-      id: _string(json, const ['id', 'invitation_id', 'link_id']) ?? '',
+      id: _familyIdentity(json, const ['id', 'invitation_id', 'link_id']) ?? '',
       email: _string(json, const [
             'email',
             'invitee_email',
@@ -508,6 +600,9 @@ class FamilyInvitation {
           ]) ??
           _string(counterpart, const ['email']) ??
           '',
+      authorizationEpoch: json['authorization_epoch'] is int
+          ? json['authorization_epoch'] as int
+          : null,
       status: InvitationStatus.fromJson(json['status']),
       name: _string(json, const [
             'name',
@@ -517,18 +612,20 @@ class FamilyInvitation {
           _string(counterpart, const ['display_name', 'name']),
       createdAt: _date(json, const ['created_at', 'createdAt']),
       token: _string(json, const ['token', 'invitation_token']),
-      scopes: (_stringList(json['scopes'] ?? json['permissions']) ??
-              const ['care_tasks'])
-          .where((scope) => scope.isNotEmpty)
-          .toList(growable: false),
-      elderId: _string(json, const ['elder_id', 'elderId']) ??
-          _string(elder, const ['id', 'user_id']),
-      caregiverId: _string(json, const ['caregiver_id', 'caregiverId']) ??
-          _string(caregiver, const ['id', 'user_id']),
+      scopes: _familyScopes(json['scopes']),
+      elderId: _familyIdentity(json, const ['elder_id', 'elderId']) ??
+          _familyIdentity(elder, const ['id', 'user_id']),
+      caregiverId:
+          _familyIdentity(json, const ['caregiver_id', 'caregiverId']) ??
+              _familyIdentity(caregiver, const ['id', 'user_id']),
       elderName: _string(json, const ['elder_name', 'elderName']) ??
           _string(elder, const ['display_name', 'name']),
       caregiverName: _string(json, const ['caregiver_name', 'caregiverName']) ??
           _string(caregiver, const ['display_name', 'name']),
+      elderEmail: _string(elder, const ['email']) ??
+          _string(json, const ['elder_email']),
+      caregiverEmail: _string(caregiver, const ['email']) ??
+          _string(json, const ['caregiver_email']),
     );
   }
 }
@@ -538,6 +635,7 @@ class FamilyInvitation {
 class MemoryRecord {
   const MemoryRecord({
     required this.id,
+    this.revision,
     required this.content,
     required this.kind,
     this.status = 'candidate',
@@ -567,8 +665,11 @@ class MemoryRecord {
       status.toLowerCase() == 'active' ||
       status.toLowerCase() == 'saved';
 
+  final int? revision;
+
   factory MemoryRecord.fromJson(Map<String, dynamic> json) {
     return MemoryRecord(
+      revision: _memoryRevision(json['revision']),
       id: _string(json, const ['id', 'memory_id']) ?? '',
       content: _string(json, const ['content', 'text', 'summary']) ?? '',
       kind: _string(json, const ['kind', 'type', 'memory_kind']) ?? 'note',
@@ -625,6 +726,7 @@ class MemorySearchResult {
 class StoryRecord {
   const StoryRecord({
     required this.id,
+    this.revision,
     required this.title,
     required this.content,
     this.memoryIds = const [],
@@ -637,8 +739,11 @@ class StoryRecord {
   final List<String> memoryIds;
   final DateTime? createdAt;
 
+  final int? revision;
+
   factory StoryRecord.fromJson(Map<String, dynamic> json) {
     return StoryRecord(
+      revision: _memoryRevision(json['revision']),
       id: _string(json, const ['id', 'story_id']) ?? '',
       title: _string(json, const ['title', 'name']) ?? '我的故事',
       content: _string(json, const ['content', 'body', 'text']) ?? '',
@@ -790,11 +895,15 @@ class SkillSuggestion {
       required this.suggestion,
       required this.status,
       this.memoryId,
+      this.revision,
       this.reason = ''});
   final String id, suggestion, status, reason;
   final String? memoryId;
+  final int? revision;
+
   factory SkillSuggestion.fromJson(Map<String, dynamic> json) =>
       SkillSuggestion(
+        revision: _memoryRevision(json['revision']),
         id: _string(json, const ['id']) ?? '',
         suggestion: _string(json, const ['suggestion', 'skill']) ?? '',
         status: _string(json, const ['status']) ?? 'suggested',
@@ -949,6 +1058,9 @@ class FamilyMessage {
     this.sourceStoryId,
     this.senderName,
     this.recipientName,
+    this.linkEpoch,
+    this.accessRevokedAt,
+    this.accessRevocationReason,
   });
 
   final String id;
@@ -959,6 +1071,12 @@ class FamilyMessage {
   final String? sourceStoryId;
   final String? senderName;
   final String? recipientName;
+  final int? linkEpoch;
+  final DateTime? accessRevokedAt;
+  final String? accessRevocationReason;
+  bool get isAccessWithdrawn =>
+      accessRevokedAt != null ||
+      (accessRevocationReason?.trim().isNotEmpty ?? false);
 
   factory FamilyMessage.fromJson(Map<String, dynamic> json) {
     final sender = _map(json['sender']);
@@ -973,6 +1091,9 @@ class FamilyMessage {
           '',
       content: _string(json, const ['content', 'body', 'text']) ?? '',
       createdAt: _date(json, const ['created_at', 'createdAt', 'timestamp']),
+      linkEpoch: json['link_epoch'] is int ? json['link_epoch'] as int : null,
+      accessRevokedAt: _date(json, const ['access_revoked_at']),
+      accessRevocationReason: _string(json, const ['access_revocation_reason']),
       sourceStoryId: _string(json, const ['source_story_id', 'sourceStoryId']),
       senderName: _string(json, const ['sender_name', 'senderName']) ??
           _string(sender, const ['display_name', 'name']),
@@ -1017,6 +1138,22 @@ class SendMessageResult {
   final bool? demoMode;
 }
 
+class CatalogRecommendationReason {
+  const CatalogRecommendationReason(
+      {required this.memoryId,
+      required this.sourceType,
+      required this.sourceText,
+      required this.matchedTag});
+  final String memoryId, sourceType, sourceText, matchedTag;
+  factory CatalogRecommendationReason.fromJson(Map<String, dynamic> json) =>
+      CatalogRecommendationReason(
+        memoryId: _string(json, const ['memory_id']) ?? '',
+        sourceType: _string(json, const ['source_type']) ?? '',
+        sourceText: _string(json, const ['source_text']) ?? '',
+        matchedTag: _string(json, const ['matched_tag']) ?? '',
+      );
+}
+
 /// A verified community activity for the Community Discovery feature.
 class CatalogActivity {
   const CatalogActivity({
@@ -1037,6 +1174,10 @@ class CatalogActivity {
     this.verified = false,
     this.verifiedAt,
     this.interestStatus,
+    this.available = true,
+    this.availabilityStatus,
+    this.recommendationBasis,
+    this.recommendationReasons = const [],
   });
 
   final String id;
@@ -1056,6 +1197,10 @@ class CatalogActivity {
   final bool verified;
   final DateTime? verifiedAt;
   final String? interestStatus;
+  final bool available;
+  final String? availabilityStatus;
+  final String? recommendationBasis;
+  final List<CatalogRecommendationReason> recommendationReasons;
 
   factory CatalogActivity.fromJson(Map<String, dynamic> json) {
     return CatalogActivity(
@@ -1079,6 +1224,18 @@ class CatalogActivity {
           _string(json, const ['contribution_type', 'contributionType']),
       verified: _bool(json, const ['verified', 'is_verified']) ?? false,
       verifiedAt: _date(json, const ['verified_at', 'verifiedAt']),
+      available: _bool(json, const ['available']) ?? true,
+      availabilityStatus: _string(json, const ['availability_status']),
+      recommendationBasis: _string(json, const ['recommendation_basis']),
+      recommendationReasons: mapsFromJson(json['recommendation_reasons'])
+          .map(CatalogRecommendationReason.fromJson)
+          .where((reason) =>
+              reason.memoryId.isNotEmpty &&
+              (reason.sourceType == 'preference' ||
+                  reason.sourceType == 'skill') &&
+              reason.sourceText.isNotEmpty &&
+              reason.matchedTag.isNotEmpty)
+          .toList(growable: false),
       interestStatus:
           _string(json, const ['interest_status', 'interestStatus']),
     );
@@ -1246,6 +1403,29 @@ bool? _bool(Map<String, dynamic> json, List<String> keys) {
   return null;
 }
 
+// Task API instants are UTC; older SQLite receipts may omit the suffix.
+DateTime? _taskInstant(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final value = json[key];
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed == null) continue;
+      if (parsed.isUtc) return parsed.toLocal();
+      return DateTime.utc(
+              parsed.year,
+              parsed.month,
+              parsed.day,
+              parsed.hour,
+              parsed.minute,
+              parsed.second,
+              parsed.millisecond,
+              parsed.microsecond)
+          .toLocal();
+    }
+  }
+  return _date(json, keys);
+}
+
 DateTime? _date(Map<String, dynamic> json, List<String> keys) {
   for (final key in keys) {
     final value = json[key];
@@ -1334,4 +1514,80 @@ Map<String, dynamic>? mapFromJson(Object? value) {
   if (map == null) return null;
   final nested = _map(map['data']) ?? _map(map['result']);
   return nested ?? map;
+}
+
+int? _memoryRevision(Object? value) =>
+    value is int && value >= 0 ? value : null;
+
+Map<String, int> _memoryCounts(Object? value) {
+  if (value is! Map) throw const FormatException('Missing memory counts.');
+  final result = <String, int>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String ||
+        entry.value is! int ||
+        (entry.value as int) < 0) {
+      throw const FormatException('Invalid memory counts.');
+    }
+    result[entry.key as String] = entry.value as int;
+  }
+  return Map.unmodifiable(result);
+}
+
+class MemoryControlState {
+  const MemoryControlState(
+      {required this.enabled, required this.revision, required this.counts});
+  final bool enabled;
+  final int revision;
+  final Map<String, int> counts;
+  factory MemoryControlState.fromJson(Map<String, dynamic> json) {
+    final revision = _memoryRevision(json['revision']);
+    if (revision == null || json['enabled'] is! bool) {
+      throw const FormatException('Invalid memory control state.');
+    }
+    return MemoryControlState(
+        enabled: json['enabled'] as bool,
+        revision: revision,
+        counts: _memoryCounts(json['counts']));
+  }
+}
+
+class MemoryDeletionReceipt {
+  const MemoryDeletionReceipt(
+      {required this.requestId, required this.revision, required this.counts});
+  final String requestId;
+  final int revision;
+  final Map<String, int> counts;
+  factory MemoryDeletionReceipt.fromJson(Map<String, dynamic> json) {
+    final revision = _memoryRevision(json['revision']);
+    final id = json['request_id'];
+    if (revision == null || id is! String || id.trim().isEmpty) {
+      throw const FormatException('Invalid memory deletion receipt.');
+    }
+    return MemoryDeletionReceipt(
+        requestId: id,
+        revision: revision,
+        counts: _memoryCounts(json['counts']));
+  }
+}
+
+// Authorization fields must retain their wire types; never infer identity or grants.
+String? _familyIdentity(Map<String, dynamic>? json, List<String> keys) {
+  if (json == null) return null;
+  for (final key in keys) {
+    if (json.containsKey(key)) {
+      final value = json[key];
+      return value is String ? value : '';
+    }
+  }
+  return null;
+}
+
+List<String> _familyScopes(Object? value) {
+  if (value is! List ||
+      value.any((scope) => scope is! String || scope.trim().isEmpty)) {
+    return const [];
+  }
+  final scopes = value.cast<String>();
+  if (scopes.toSet().length != scopes.length) return const [];
+  return List<String>.unmodifiable(scopes);
 }

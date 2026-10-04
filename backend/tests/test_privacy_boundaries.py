@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .memory_revision_helpers import memory_revision_headers
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ def _register(client: TestClient, email: str, *, enable_memory: bool = False) ->
     if enable_memory:
         changed = client.put(
             "/memories/consent",
-            headers={"Authorization": f"Bearer {account['access_token']}"},
+            headers=memory_revision_headers(client, {"Authorization": f"Bearer {account['access_token']}"}),
             json={"enabled": True},
         )
         assert changed.status_code == 200, changed.text
@@ -80,8 +81,10 @@ def test_memory_defaults_off_blocks_create_search_and_chat_suggestion_but_keeps_
     with TestClient(app) as client:
         elder = _register(client, "default-off@example.test")
         headers = _headers(elder)
-        assert client.get("/memories/consent", headers=headers).json() == {"enabled": False}
-        assert client.post("/memories", headers=headers, json={"content": "Jasmine tea"}).status_code == 403
+        assert client.get("/memories/consent", headers=headers).json() == {
+            "enabled": False, "revision": 0, "counts": {"total": 0, "current": 0},
+        }
+        assert client.post("/memories", headers=memory_revision_headers(client, headers), json={"content": "Jasmine tea"}).status_code == 403
         assert client.post("/memories/search", headers=headers, json={"query": "tea"}).status_code == 403
 
         # Existing account records remain reviewable and removable while consent is off.
@@ -91,9 +94,9 @@ def test_memory_defaults_off_blocks_create_search_and_chat_suggestion_but_keeps_
             db.commit()
             memory_id = memory.id
         assert client.get("/memories", headers=headers).status_code == 200
-        edited = client.patch(f"/memories/{memory_id}", headers=headers, json={"content": "Edited"})
+        edited = client.patch(f"/memories/{memory_id}", headers=memory_revision_headers(client, headers), json={"content": "Edited"})
         assert edited.status_code == 200
-        assert client.delete(f"/memories/{edited.json()['id']}", headers=headers).status_code == 204
+        assert client.delete(f"/memories/{edited.json()['id']}", headers=memory_revision_headers(client, headers, idempotency_key='test_privacy_boundaries-96-delete')).status_code == 204
 
         conversation = client.post("/conversations", headers=headers, json={}).json()
         turn = client.post(
@@ -147,6 +150,7 @@ def test_explicit_save_is_first_memory_persistence_and_opt_out_stops_recall(tmp_
             "sensitivity": "ordinary",
             "requires_confirmation": True,
             "topic_key": "jasmine_tea",
+            "revision": 1,
         }
         assert "candidate_memory_id" not in turn.json()["assistant_message"]["metadata_json"]
 
@@ -157,7 +161,7 @@ def test_explicit_save_is_first_memory_persistence_and_opt_out_stops_recall(tmp_
 
         saved = client.post(
             "/memories/save",
-            headers=headers,
+            headers=memory_revision_headers(client, headers),
             json={
                 "content": suggestion["content"],
                 "kind": suggestion["kind"],
@@ -169,7 +173,7 @@ def test_explicit_save_is_first_memory_persistence_and_opt_out_stops_recall(tmp_
         assert saved.json()["status"] == "confirmed"
         replay = client.post(
             "/memories/save",
-            headers=headers,
+            headers=memory_revision_headers(client, headers),
             json={
                 "content": suggestion["content"],
                 "kind": suggestion["kind"],
@@ -180,7 +184,12 @@ def test_explicit_save_is_first_memory_persistence_and_opt_out_stops_recall(tmp_
         assert replay.status_code == 201
         assert replay.json()["id"] == saved.json()["id"]
 
-        assert client.put("/memories/consent", headers=headers, json={"enabled": False}).json() == {"enabled": False}
+        withdrawal_headers = memory_revision_headers(client, headers)
+        assert client.put("/memories/consent", headers=withdrawal_headers, json={"enabled": False}).json() == {
+            "enabled": False,
+            "revision": int(withdrawal_headers["X-Memory-Revision"]) + 1,
+            "counts": {"total": 1, "current": 1},
+        }
         assert client.post("/memories/search", headers=headers, json={"query": "jasmine"}).status_code == 403
         with app.state.session_factory() as db:
             retrieval = asyncio.run(retrieve_for_chat(db, elder["account"]["id"], "jasmine"))
@@ -203,7 +212,9 @@ def test_existing_database_without_consent_table_starts_default_off(tmp_path: Pa
     with TestClient(restarted) as client:
         consent = client.get("/memories/consent", headers={"Authorization": f"Bearer {token}"})
         assert consent.status_code == 200
-        assert consent.json() == {"enabled": False}
+        assert consent.json() == {
+            "enabled": False, "revision": 0, "counts": {"total": 0, "current": 0},
+        }
         assert client.post(
-            "/memories", headers={"Authorization": f"Bearer {token}"}, json={"content": "Legacy"}
+            "/memories", headers=memory_revision_headers(client, {"Authorization": f"Bearer {token}"}), json={"content": "Legacy"}
         ).status_code == 403

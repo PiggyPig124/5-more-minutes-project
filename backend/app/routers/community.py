@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,7 +17,8 @@ from ..db import get_db
 from ..dependencies import require_elder
 from ..memory_consent import memory_consent_enabled
 from ..memory_models import PersonalMemory
-from ..memory_service import memory_capture_method
+from ..memory_service import (lock_owner_account, memory_capture_method,
+                              memory_revision, require_memory_revision)
 from ..models import Account
 
 router = APIRouter(prefix="/community", tags=["community"])
@@ -55,6 +56,7 @@ class SkillOut(BaseModel):
     suggestion: str
     status: Literal["suggested", "confirmed", "rejected"]
     reason: str
+    revision: int
 
 
 class SkillList(BaseModel):
@@ -189,8 +191,12 @@ def browse_activities(
 
 @router.get("/skills/suggestions", response_model=SkillList)
 def skill_suggestions(
-    account: Account = Depends(require_elder), db: Session = Depends(get_db)
+    account: Account = Depends(require_elder), db: Session = Depends(get_db),
+    expected_revision: int | None = Header(default=None, alias="X-Memory-Revision"),
 ) -> SkillList:
+    owner_id = account.id
+    lock_owner_account(db, owner_id)
+    require_memory_revision(db, owner_id, expected_revision)
     _require_consent(db, account.id)
     memories = db.scalars(
         select(PersonalMemory).where(
@@ -224,17 +230,20 @@ def skill_suggestions(
             db.flush()
         if skill.status != "rejected":
             items.append(skill)
-    db.commit()
-    return SkillList(items=[
+    revision = memory_revision(db, owner_id)
+    output = SkillList(items=[
         SkillOut(
             id=x.id,
             memory_id=x.memory_id,
             suggestion=x.suggestion,
             status=x.status,
             reason="Suggested from a memory you chose to save or confirm. You decide whether it is accurate and whether to use it.",
+            revision=revision,
         )
         for x in items
     ])
+    db.commit()
+    return output
 
 
 @router.post("/skills/{skill_id}/decision", response_model=SkillOut)
@@ -243,7 +252,11 @@ def decide_skill(
     payload: SkillDecision,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
+    expected_revision: int | None = Header(default=None, alias="X-Memory-Revision"),
 ) -> SkillOut:
+    owner_id = account.id
+    lock_owner_account(db, owner_id)
+    require_memory_revision(db, owner_id, expected_revision)
     _require_consent(db, account.id)
     skill = db.get(CommunitySkill, skill_id)
     if skill is None:
@@ -262,14 +275,16 @@ def decide_skill(
         skill.suggestion = payload.skill if payload.decision == "edit" else skill.suggestion
         skill.status = "confirmed"
     skill.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    return SkillOut(
+    output = SkillOut(
         id=skill.id,
         memory_id=skill.memory_id,
         suggestion=skill.suggestion,
         status=skill.status,
         reason="Based on your confirmed memory; no profile or message was shared.",
+        revision=memory_revision(db, owner_id),
     )
+    db.commit()
+    return output
 
 
 @router.get("/opportunities", response_model=ListingList)

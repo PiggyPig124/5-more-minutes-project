@@ -41,6 +41,8 @@ class FamilyInvitation(Base):
     scopes: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["care_tasks"], nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_link_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    accepted_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     accepted_by: Mapped[str | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -48,6 +50,7 @@ class FamilyInvitation(Base):
 
 
 class FamilyLink(Base):
+    authorization_epoch: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     __tablename__ = "family_links"
     __table_args__ = (UniqueConstraint("elder_id", "caregiver_id", name="uq_family_link_pair"),)
 

@@ -123,12 +123,18 @@ class _CareServer {
         return _json([
           {
             'id': 'contact-1',
+            'elder_id': 'elder',
+            'caregiver_id': 'alice',
+            'family_link_id': 'link-1',
             'label': 'Daughter',
             'caregiver_name': 'Alex',
             'is_enabled': true
           },
           {
             'id': 'contact-2',
+            'elder_id': 'elder',
+            'caregiver_id': 'bob',
+            'family_link_id': 'link-2',
             'label': 'Son',
             'caregiver_name': 'Sam',
             'is_enabled': true
@@ -144,9 +150,22 @@ class _CareServer {
         return _json([
           {
             'id': 'link-1',
+            'elder_id': 'elder',
+            'caregiver_id': 'alice',
+            'authorization_epoch': 1,
             'status': 'accepted',
             'email': 'alex@example.com',
             'caregiver_name': 'Alex',
+            'scopes': ['family_messages']
+          },
+          {
+            'id': 'link-2',
+            'elder_id': 'elder',
+            'caregiver_id': 'bob',
+            'authorization_epoch': 1,
+            'status': 'active',
+            'email': 'sam@example.com',
+            'caregiver_name': 'Sam',
             'scopes': ['family_messages']
           }
         ]);
@@ -341,7 +360,7 @@ void main() {
     expect(first['safety_event_id'], isNull);
     expect(
         await store.readFamilyMessageClientId(
-            recipientId: 'safety:contact-1',
+            recipientId: 'safety:contact-1:link:link-1:epoch:1',
             content: first['message'] as String,
             userId: 'elder'),
         first['idempotency_key']);

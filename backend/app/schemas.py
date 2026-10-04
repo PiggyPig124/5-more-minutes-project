@@ -52,6 +52,7 @@ class TokenResponse(BaseModel):
 
 
 class FamilyInvitationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=320)
     scopes: list[str] = Field(default_factory=lambda: ["care_tasks"])
 
@@ -70,6 +71,7 @@ class FamilyInvitationCreate(BaseModel):
 
 
 class FamilyInvitationAccept(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     token: str = Field(min_length=16, max_length=256)
 
 
@@ -88,6 +90,7 @@ class FamilyInvitationOut(APIModel):
 
 
 class FamilyLinkOut(APIModel):
+    authorization_epoch: int
     id: str
     elder_id: str
     caregiver_id: str
@@ -168,6 +171,8 @@ class ActionDecisionRequest(BaseModel):
 
 
 class TaskOut(APIModel):
+    access_mode: Literal["owner"] = "owner"
+    content_hash: str | None = None
     id: str
     owner_id: str
     created_by: str
@@ -187,12 +192,14 @@ class ActionDecisionOut(BaseModel):
 
 
 class TaskPatch(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_type: str | None = Field(default=None, min_length=1, max_length=40)
     title: str | None = Field(default=None, min_length=1, max_length=240)
     description: str | None = Field(default=None, max_length=5000)
     due_at: datetime | None = None
     status: Literal["pending", "in_progress", "completed", "dismissed"] | None = None
 
-    @field_validator("title", "description", "status", mode="before")
+    @field_validator("title", "description", "status", "task_type", mode="before")
     @classmethod
     def reject_null_required_patch_fields(cls, value: object) -> object:
         if value is None:
@@ -241,6 +248,8 @@ class SafetySupportRequest(BaseModel):
     """
 
     emergency_contact_id: str = Field(min_length=1, max_length=36)
+    family_link_id: str = Field(min_length=1, max_length=36)
+    expected_authorization_epoch: int = Field(strict=True, ge=1)
     message: str = Field(min_length=1, max_length=2000)
     safety_event_id: str | None = Field(default=None, min_length=1, max_length=36)
     idempotency_key: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")

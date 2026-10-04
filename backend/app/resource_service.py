@@ -562,4 +562,15 @@ async def search_resources(db: object, query: str, limit: int = 4) -> dict[str, 
     from starlette.concurrency import run_in_threadpool
 
     response = await run_in_threadpool(service.search, query, limit, db=db)
-    return response.model_dump(mode="json")
+    result = response.model_dump(mode="json")
+    # Internal chat provenance, separate from the stable ResourceItem wire DTO.
+    # Bind only results matching the reviewed manifest, never arbitrary fields
+    # supplied by a model or a database row with stale/tampered display values.
+    manifest = {record.id: record for record in service.records}
+    result["source_bindings"] = [
+        {"source_id": item.id, "content_hash": _record_hash(manifest[item.id])}
+        for item in response.items
+        if item.id in manifest and item.model_dump(mode="json") ==
+        ResourceItem.model_validate(manifest[item.id].model_dump()).model_dump(mode="json")
+    ]
+    return result

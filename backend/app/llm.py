@@ -346,7 +346,13 @@ class DeterministicDemoAdapter:
                 "worried", "guilt", "lonely", "擔心", "担心", "內疚", "愧疚", "孤單", "孤独", "自責",
             )):
                 acknowledgement = "聽起來這件事讓你很掛心，我願意聽你說。"
-            text = "[DEMO MODE — deterministic] 示範模式：" + acknowledgement + "以下內容來自你的已保存記憶。" + evidence_text
+            if memory_evidence and resource_evidence:
+                attribution = "以下內容參考公共資源及你的已保存記憶。"
+            elif resource_evidence:
+                attribution = "以下內容參考公共資源。"
+            else:
+                attribution = "以下內容來自你的已保存記憶。"
+            text = "[DEMO MODE — deterministic] 示範模式：" + acknowledgement + attribution + evidence_text
         elif context.get("resource_query"):
             text = "[DEMO MODE — deterministic] 暫時找不到足夠的已核實資料，不能判斷資格。你想查哪一項援助或服務？"
         elif _asks_about_context(user_message):

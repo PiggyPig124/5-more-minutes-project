@@ -58,9 +58,9 @@ class APIClient:
         self.timeout = timeout
         self.token: str | None = None
 
-    def request(self, method: str, path: str, payload: Any | None = None) -> HTTPResult:
+    def request(self, method: str, path: str, payload: Any | None = None, *, headers: dict[str, str] | None = None) -> HTTPResult:
         url = self.base_url + "/" + path.lstrip("/")
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **(headers or {})}
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if self.token:
@@ -80,11 +80,11 @@ class APIClient:
     def get(self, path: str) -> HTTPResult:
         return self.request("GET", path)
 
-    def post(self, path: str, payload: Any | None = None) -> HTTPResult:
-        return self.request("POST", path, payload)
+    def post(self, path: str, payload: Any | None = None, *, headers: dict[str, str] | None = None) -> HTTPResult:
+        return self.request("POST", path, payload, headers=headers)
 
-    def delete(self, path: str) -> HTTPResult:
-        return self.request("DELETE", path)
+    def delete(self, path: str, *, headers: dict[str, str] | None = None) -> HTTPResult:
+        return self.request("DELETE", path, headers=headers)
 
 
 def _json_or_text(raw: str) -> Any:
@@ -533,13 +533,78 @@ class AcceptanceRun:
             sum(_id(item, "source_action_id") == action_id for item in elder_task_items) == 1,
         )
 
+        # SRS FR FAM 03 and AT 05: a connection is eligibility, not item consent.
         caregiver_tasks = caregiver_client.get("/tasks")
-        self.require_status("linked caregiver task list available", caregiver_tasks, ACCEPTED_SUCCESS)
-        caregiver_task_items = _items(caregiver_tasks.body)
-        self.check(
-            "linked caregiver can see explicitly shared care task",
-            any(_id(item, "id", "task_id") == task_id for item in caregiver_task_items),
-        )
+        self.require_status("linked caregiver task list available", caregiver_tasks, (200,))
+        self.check("connection alone reveals no elder task",
+            not any(_id(item, "id") == task_id for item in _items(caregiver_tasks.body)))
+        self.status("unshared elder detail is inaccessible",
+            caregiver_client.get(f"/tasks/{task_id}"), FORBIDDEN_OR_NOT_FOUND)
+
+        own_conversation = caregiver_client.post("/conversations", {"title": "Synthetic own task"})
+        self.require_status("caregiver creates own task conversation", own_conversation, ACCEPTED_SUCCESS)
+        own_cid = self.require_value("caregiver own conversation id", _id(own_conversation.body, "id"))
+        own_preview = caregiver_client.post(f"/conversations/{own_cid}/messages",
+            {"content": "Please remind me tomorrow at 10:00 to buy groceries."})
+        self.require_status("caregiver creates own action preview", own_preview, ACCEPTED_SUCCESS)
+        own_action_id = self.require_value("caregiver own action id", _id(_unwrap(own_preview.body).get("action") or {}, "id"))
+        own_confirm = caregiver_client.post(f"/actions/{own_action_id}/confirm",
+            {"idempotency_key": f"own-{run_id}"})
+        self.require_status("caregiver confirms own task", own_confirm, ACCEPTED_SUCCESS)
+        own_task_id = self.require_value("caregiver own task id", _id(_unwrap(own_confirm.body).get("task") or {}, "id"))
+        self.require_status("caregiver reads own task", caregiver_client.get(f"/tasks/{own_task_id}"), (200,))
+
+        preview = elder_client.get(f"/tasks/{task_id}")
+        self.require_status("owner loads fresh share content preview", preview, (200,))
+        preview_body = _unwrap(preview.body)
+        fingerprint = self.require_value("fresh preview content hash", preview_body.get("content_hash"))
+        self.check("share preview is the selected task", _id(preview_body, "id") == task_id)
+        selected_recipient = _id(_account(caregiver["body"]), "id")
+        self.check("selected connection identifies intended caregiver",
+            _unwrap(accepted.body).get("caregiver_id") == selected_recipient)
+        share_payload = {"family_link_id": link_id, "expected_content_hash": fingerprint,
+            "idempotency_key": f"share-{run_id}"}
+        grant = elder_client.post(f"/tasks/{task_id}/shares", share_payload)
+        self.require_status("owner explicitly confirms selected task and recipient", grant, (201,))
+        share_id = self.require_value("explicit grant id returned", _id(grant.body, "id"))
+        self.check("grant receipt matches reviewed task content and recipient",
+            _unwrap(grant.body).get("task_id") == task_id and
+            _unwrap(grant.body).get("family_link_id") == link_id and
+            _unwrap(grant.body).get("caregiver_id") == selected_recipient and
+            _unwrap(grant.body).get("content_hash") == fingerprint)
+        shared_tasks = caregiver_client.get("/tasks")
+        self.require_status("caregiver lists explicitly shared task", shared_tasks, (200,))
+        self.check("explicit grant exposes exactly one read-only selected task",
+            len([item for item in _items(shared_tasks.body) if _id(item, "id") == task_id
+                and item.get("share_id") == share_id and item.get("access_mode") == "shared_readonly"]) == 1)
+        self.check("sharing preserves caregiver own task",
+            any(_id(item, "id") == own_task_id for item in _items(shared_tasks.body)))
+        self.require_status("caregiver reads explicitly shared detail", caregiver_client.get(f"/tasks/{task_id}"), (200,))
+        self.status("unrelated caregiver cannot read shared task",
+            wrong_caregiver_client.get(f"/tasks/{task_id}"), FORBIDDEN_OR_NOT_FOUND)
+        self.status("shared caregiver cannot edit elder task",
+            caregiver_client.request("PATCH", f"/tasks/{task_id}", {"status": "completed"}), FORBIDDEN_OR_NOT_FOUND)
+
+        stopped = elder_client.request("DELETE", f"/tasks/{task_id}/shares/{share_id}")
+        self.require_status("owner stops this item share", stopped, (200,))
+        self.check("item revoke receipt records stopped grant", bool(_unwrap(stopped.body).get("revoked_at")))
+        self.status("item revoke blocks future detail access",
+            caregiver_client.get(f"/tasks/{task_id}"), FORBIDDEN_OR_NOT_FOUND)
+        stopped_tasks = caregiver_client.get("/tasks")
+        self.require_status("task list remains available after item revoke", stopped_tasks, (200,))
+        self.check("item revoke removes elder task but preserves caregiver own task",
+            not any(_id(item, "id") == task_id for item in _items(stopped_tasks.body)) and
+            any(_id(item, "id") == own_task_id for item in _items(stopped_tasks.body)))
+        self.require_status("caregiver still edits own task after item revoke",
+            caregiver_client.request("PATCH", f"/tasks/{own_task_id}", {"status": "completed"}), (200,))
+        fresh_preview = elder_client.get(f"/tasks/{task_id}")
+        self.require_status("owner reloads task for a new explicit grant", fresh_preview, (200,))
+        share_payload = {**share_payload, "expected_content_hash": _unwrap(fresh_preview.body).get("content_hash"),
+            "idempotency_key": f"share-again-{run_id}"}
+        new_grant = elder_client.post(f"/tasks/{task_id}/shares", share_payload)
+        self.require_status("owner explicitly grants again before connection revoke", new_grant, (201,))
+        self.check("new consent has a new grant id", _id(new_grant.body, "id") != share_id)
+        self.require_status("new explicit grant restores detail access", caregiver_client.get(f"/tasks/{task_id}"), (200,))
 
         elder_conversation_after_reconnect = APIClient(self.client.base_url, self.client.timeout)
         elder_conversation_after_reconnect.token = elder_client.token
@@ -556,21 +621,15 @@ class AcceptanceRun:
         self.check("revoked link reports revoked status", _status(revoked_body) in {"revoked", "inactive"})
 
         caregiver_tasks_after_revoke = caregiver_client.get("/tasks")
-        # The resource may be represented as an empty 200 list or denied.  What
-        # matters is that the old elder task is no longer disclosed.
-        self.status(
-            "caregiver task access is re-evaluated after revocation",
-            caregiver_tasks_after_revoke,
-            ACCEPTED_SUCCESS + FORBIDDEN_OR_NOT_FOUND,
-        )
-        if caregiver_tasks_after_revoke.status in ACCEPTED_SUCCESS:
-            self.check(
-                "revoked caregiver no longer sees elder care task",
-                not any(
-                    _id(item, "id", "task_id") == task_id
-                    for item in _items(caregiver_tasks_after_revoke.body)
-                ),
-            )
+        self.require_status("caregiver task list survives connection revoke", caregiver_tasks_after_revoke, (200,))
+        self.check("revoked caregiver no longer sees elder care task",
+            not any(_id(item, "id") == task_id for item in _items(caregiver_tasks_after_revoke.body)))
+        self.status("connection revoke blocks previously granted detail",
+            caregiver_client.get(f"/tasks/{task_id}"), FORBIDDEN_OR_NOT_FOUND)
+        self.check("connection revoke preserves caregiver own task",
+            any(_id(item, "id") == own_task_id for item in _items(caregiver_tasks_after_revoke.body)))
+        self.require_status("caregiver still edits own task after connection revoke",
+            caregiver_client.request("PATCH", f"/tasks/{own_task_id}", {"status": "pending"}), (200,))
 
         elder_tasks_after_revoke = elder_client.get("/tasks")
         self.require_status("elder retains task after sharing revoke", elder_tasks_after_revoke, ACCEPTED_SUCCESS)

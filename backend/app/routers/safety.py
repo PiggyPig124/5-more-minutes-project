@@ -86,6 +86,9 @@ def add_emergency_contact(
     owner_id = account.id
     _lock_owner(db, owner_id)
     link = db.scalar(select(FamilyLink).where(FamilyLink.id == payload.family_link_id).with_for_update())
+    from ..family_connection_service import pair_is_blocked
+    if link and pair_is_blocked(db, link.elder_id, link.caregiver_id):
+        raise HTTPException(403, "Connection unavailable")
     if link is None or link.elder_id != owner_id or link.status != "active":
         raise HTTPException(404, "Family link not found or not active")
     if "family_messages" not in (link.scopes or []):
@@ -154,11 +157,17 @@ def send_support_request(
     link = db.scalar(select(FamilyLink).where(FamilyLink.id == contact.family_link_id).with_for_update())
     contact = db.scalar(select(EmergencyContact).where(EmergencyContact.id == contact.id)
                         .with_for_update().execution_options(populate_existing=True))
+    from ..family_connection_service import pair_is_blocked
+    if link and pair_is_blocked(db, link.elder_id, link.caregiver_id):
+        raise HTTPException(403, "Connection unavailable")
     if not contact.is_enabled:
         raise HTTPException(403, "This emergency contact is disabled")
     if (link is None or link.status != "active" or link.elder_id != owner_id
             or link.caregiver_id != contact.caregiver_id or "family_messages" not in (link.scopes or [])):
         raise HTTPException(403, "The family link is no longer active or lacks family_messages scope.")
+
+    if payload.family_link_id != link.id or payload.expected_authorization_epoch != link.authorization_epoch:
+        raise HTTPException(410, "Preview authorization has ended; review a new share")
 
     # Preserve event/contact binding without putting private event IDs or text
     # in recipient-visible message content. Lookup uses only the stable key;
@@ -189,11 +198,14 @@ def send_support_request(
         if event is None:
             raise HTTPException(404, "Safety event not found")
     if existing is not None:
+        if existing.access_revoked_at is not None or existing.link_epoch != link.authorization_epoch:
+            raise HTTPException(410, "Previous sharing authorization has ended")
         return SafetySupportRequestOut(
             sent=True, family_message_id=existing.id,
             emergency_contact_id=contact.id, message=existing.content,
         )
     message = FamilyMessage(
+        link_epoch=link.authorization_epoch,
         link_id=link.id,
         sender_id=owner_id,
         recipient_id=contact.caregiver_id,

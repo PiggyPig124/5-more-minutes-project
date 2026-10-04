@@ -31,7 +31,7 @@ from .memory_models import (
     embedding_dimensions,
 )
 from .memory_consent import memory_consent_enabled
-from .models import Account, Conversation, Message
+from .models import Account, ActionProposal, Conversation, Message
 
 try:  # The collaboration milestone may not be installed in an isolated test.
     from .collaboration_models import FamilyMessage
@@ -262,7 +262,16 @@ async def index_memory_with_adapter(
     adapter: EmbeddingAdapter | None = None,
 ) -> str:
     adapter = adapter or EmbeddingAdapter()
+    db.flush()
+    owner_id, memory_id = memory.owner_id, memory.id
+    revision = memory_revision(db, owner_id)
     vector = await adapter.embed(memory.content)
+    db.expire_all()
+    current = db.scalar(select(PersonalMemory).where(PersonalMemory.id == memory_id, PersonalMemory.owner_id == owner_id))
+    if current is None or current.deleted_at is not None or current.superseded_by is not None or memory_revision(db, owner_id) != revision:
+        from fastapi import HTTPException
+        raise HTTPException(409, "Memory data changed during indexing; reload.")
+    memory = current
     index_memory(db, memory, vector, adapter.settings.model if vector else None)
     return "embedding" if vector else "keyword"
 
@@ -346,7 +355,12 @@ async def retrieve_for_chat(
     if not query.strip():
         return {"items": [], "retrieval_mode": "keyword"}
     adapter = adapter or EmbeddingAdapter()
+    revision = memory_revision(db, owner_id)
     query_vector = await adapter.embed(query) if adapter.settings.configured else None
+    db.expire_all()
+    if memory_revision(db, owner_id) != revision or not memory_consent_enabled(db, owner_id):
+        from fastapi import HTTPException
+        raise HTTPException(409, "Memory data changed during retrieval; reload.")
     if query_vector is not None:
         native_candidates = _native_pgvector_candidates(db, owner_id, query_vector, adapter, limit)
         if native_candidates:
@@ -449,6 +463,27 @@ def _preference_hash(owner_id: str, topic_key: str) -> str:
     return hashlib.sha256(f"{owner_id}\0{_preference_key(topic_key)}".encode("utf-8")).hexdigest()
 
 
+def _legacy_preference_content_hash(owner_id: str, content: str) -> str:
+    # Read-only compatibility with the old punctuation-stripping fingerprint.
+    # Its ambiguous original body cannot be recovered from a deleted record.
+    normalized = re.sub(r"[^\w\u3400-\u9fff]+", "", content.casefold())
+    return hashlib.sha256(
+        f"{owner_id}\0content\0{normalized}".encode("utf-8")
+    ).hexdigest()
+
+
+def _preference_content_hash(owner_id: str, content: str) -> str:
+    # Body normalization is deliberately separate from topic-key parsing.
+    # Keep punctuation and word boundaries (C++ != C, A B != AB). Whitespace
+    # runs and case alone do not change this deterministic text fingerprint.
+    normalized = " ".join(content.casefold().split())
+    # The v2 namespace lets explicit owner actions clear only an unambiguous
+    # current-body fence, without accidentally deleting a legacy collision.
+    return hashlib.sha256(
+        f"{owner_id}\0content\0v2\0{normalized}".encode("utf-8")
+    ).hexdigest()
+
+
 def _block_preference_topic(
     db: Session,
     owner_id: str,
@@ -456,27 +491,35 @@ def _block_preference_topic(
     reason: str,
     topic_key: str | None = None,
 ) -> None:
-    # New model-maintained memories carry a generic stable key. Content is a
-    # fallback only for legacy/manual entries that have no such key.
+    # Keep the existing topic block and independently fence the stored body.
+    # Merely renaming a topic must not recapture the same withdrawn preference.
     topic = (topic_key or content).strip()
-    if not topic or len(topic) > 120:
-        return
-    topic_hash = _preference_hash(owner_id, topic)
-    block = db.get(MemoryPreferenceBlock, (owner_id, topic_hash))
-    if block is None:
-        db.add(MemoryPreferenceBlock(owner_id=owner_id, topic_hash=topic_hash, reason=reason))
-    else:
-        block.reason = reason
+    hashes = {_preference_content_hash(owner_id, content)} if content.strip() else set()
+    if topic and len(topic) <= 120:
+        hashes.add(_preference_hash(owner_id, topic))
+    for topic_hash in hashes:
+        block = db.get(MemoryPreferenceBlock, (owner_id, topic_hash))
+        if block is None:
+            db.add(MemoryPreferenceBlock(owner_id=owner_id, topic_hash=topic_hash, reason=reason))
+        else:
+            block.reason = reason
 
 
 def _clear_preference_topic_block(
     db: Session, owner_id: str, content: str, topic_key: str | None = None
 ) -> None:
+    # Only explicit owner save/confirm/restore paths call this function.
+    # Never clear an ambiguous v1 body fingerprint using a matching v2 body:
+    # Save C cannot authorize restoring a previously withdrawn C++ body.
+    # Explicit management still succeeds; legacy auto-capture remains blocked.
     topic = (topic_key or content).strip()
+    hashes = {_preference_content_hash(owner_id, content)} if content.strip() else set()
     if topic and len(topic) <= 120:
+        hashes.add(_preference_hash(owner_id, topic))
+    if hashes:
         db.execute(delete(MemoryPreferenceBlock).where(
             MemoryPreferenceBlock.owner_id == owner_id,
-            MemoryPreferenceBlock.topic_hash == _preference_hash(owner_id, topic),
+            MemoryPreferenceBlock.topic_hash.in_(hashes),
         ))
 
 
@@ -585,7 +628,13 @@ def apply_model_memory_actions(
         clean_content = content.strip()
         clean_topic_key = topic_key.strip()
         topic_hash = _preference_hash(owner_id, clean_topic_key)
-        if db.get(MemoryPreferenceBlock, (owner_id, topic_hash)) is not None:
+        if (db.get(MemoryPreferenceBlock, (owner_id, topic_hash)) is not None
+                or db.get(MemoryPreferenceBlock, (
+                    owner_id, _preference_content_hash(owner_id, clean_content)
+                )) is not None
+                or db.get(MemoryPreferenceBlock, (
+                    owner_id, _legacy_preference_content_hash(owner_id, clean_content)
+                )) is not None):
             continue
 
         if action_type == "correct_preference":
@@ -737,34 +786,34 @@ def community_memory_prompt(
 
 
 def _story_ids_for_memory(db: Session, memory_id: str) -> list[str]:
-    return list(
-        db.scalars(select(StoryMemoryLink.story_id).where(StoryMemoryLink.memory_id == memory_id)).all()
-    )
+    return list(db.scalars(select(StoryMemoryLink.story_id)
+        .join(Story, Story.id == StoryMemoryLink.story_id)
+        .join(PersonalMemory, PersonalMemory.id == StoryMemoryLink.memory_id)
+        .where(PersonalMemory.id == memory_id, Story.owner_id == PersonalMemory.owner_id)).all())
 
 
 def _memory_chain_ids(db: Session, memory_id: str) -> set[str]:
-    """Return a current memory plus all superseded predecessors."""
-
-    rows = db.scalars(select(PersonalMemory)).all()
+    anchor = db.get(PersonalMemory, memory_id)
+    if anchor is None:
+        return set()
+    rows = db.scalars(select(PersonalMemory).where(PersonalMemory.owner_id == anchor.owner_id)).all()
     ids = {memory_id}
-    changed = True
-    while changed:
-        changed = False
-        for row in rows:
-            if row.superseded_by in ids and row.id not in ids:
-                ids.add(row.id)
-                changed = True
-    return ids
+    while True:
+        extended = ids | {row.id for row in rows if row.superseded_by in ids}
+        if extended == ids:
+            return ids
+        ids = extended
 
 
-def _redact_family_messages(db: Session, story_ids: list[str]) -> None:
-    if not story_ids or FamilyMessage is None:
-        return
-    db.execute(
-        update(FamilyMessage)
-        .where(FamilyMessage.source_story_id.in_(story_ids))
-        .values(content="[故事已由擁有人撤回]")
-    )
+def _redact_family_messages(db: Session, story_ids: list[str], owner_id: str) -> None:
+    if story_ids and FamilyMessage is not None:
+        db.execute(update(FamilyMessage).where(FamilyMessage.source_story_id.in_(story_ids),
+            FamilyMessage.sender_id == owner_id).values(content="[故事已由擁有人撤回]"))
+
+
+def withdraw_story_shares(db: Session, story_ids: list[str], owner_id: str) -> None:
+    """Withdraw delivered card text without deleting its card or source links."""
+    _redact_family_messages(db, story_ids, owner_id)
 
 
 def memory_revision(db: Session, owner_id: str) -> int:
@@ -772,6 +821,16 @@ def memory_revision(db: Session, owner_id: str) -> int:
 
     row = db.get(MemoryRevision, owner_id)
     return int(row.version) if row is not None else 0
+
+
+def require_memory_revision(db: Session, owner_id: str, expected: int | None) -> int:
+    from fastapi import HTTPException
+    if expected is None:
+        raise HTTPException(422, "X-Memory-Revision is required; reload before confirming.")
+    current = memory_revision(db, owner_id)
+    if expected != current:
+        raise HTTPException(409, "Memory data changed; reload and confirm again.")
+    return current
 
 
 def bump_memory_revision(db: Session, owner_id: str) -> int:
@@ -790,24 +849,32 @@ def bump_memory_revision(db: Session, owner_id: str) -> int:
 
 
 def lock_owner_account(db: Session, owner_id: str) -> Account | None:
-    """Serialize owner-scoped memory/story mutations in a stable lock order."""
-
+    """Start a fresh owner guard; callers must acquire it before any writes."""
+    db.rollback()
+    db.expire_all()
     if db.bind is not None and db.bind.dialect.name == "sqlite":
-        db.rollback()
         db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         return db.get(Account, owner_id)
-    return db.scalar(select(Account).where(Account.id == owner_id).with_for_update())
+    return db.scalar(select(Account).where(Account.id == owner_id)
+        .with_for_update(key_share=True, read=False).execution_options(populate_existing=True))
 
 
-def purge_stories(db: Session, story_ids: list[str]) -> list[str]:
-    """Delete derived story content and redact already-sent family copies."""
-
+def purge_stories(db: Session, story_ids: list[str], owner_id: str | None = None) -> list[str]:
     if not story_ids:
         return []
-    _redact_family_messages(db, story_ids)
-    db.execute(delete(StoryMemoryLink).where(StoryMemoryLink.story_id.in_(story_ids)))
-    db.execute(delete(Story).where(Story.id.in_(story_ids)))
-    return story_ids
+    rows = db.scalars(select(Story).where(Story.id.in_(story_ids))).all()
+    if owner_id is None:
+        owners = {row.owner_id for row in rows}
+        if len(owners) > 1:
+            raise ValueError("Story purge requires one explicit owner")
+        owner_id = next(iter(owners), None)
+    ids = [row.id for row in rows if row.owner_id == owner_id]
+    if not ids:
+        return []
+    _redact_family_messages(db, ids, owner_id)
+    db.execute(delete(StoryMemoryLink).where(StoryMemoryLink.story_id.in_(ids)))
+    db.execute(delete(Story).where(Story.id.in_(ids), Story.owner_id == owner_id))
+    return ids
 
 
 def scrub_memory_references(
@@ -904,6 +971,23 @@ def scrub_memory_references(
             for key in ("memory_source_content", "memory_context", "retrieved_memories"):
                 if key in cleaned:
                     cleaned.pop(key, None)
+                    changed = True
+        # Only an explicitly sourced assistant reply establishes an action
+        # dependency. Similar text or unrelated proposals are not provenance.
+        if message.role == "assistant" and (has_memory_reference or message.id in source_message_ids):
+            action_id = cleaned.get("action_id")
+            if isinstance(action_id, str):
+                action = db.scalar(select(ActionProposal).where(
+                    ActionProposal.id == action_id,
+                    ActionProposal.owner_id == owner_id,
+                    ActionProposal.conversation_id == message.conversation_id,
+                    ActionProposal.status != "executed",
+                    ActionProposal.result_task_id.is_(None),
+                ).with_for_update())
+                if action is not None:
+                    action.payload = {}
+                    action.status = "invalidated"
+                    cleaned.pop("action_id", None)
                     changed = True
         if message.id in source_message_ids:
             message.content = "[記憶已由擁有人移除]"
@@ -1014,31 +1098,25 @@ def supersede_memory(
     return replacement
 
 
-def purge_memory(db: Session, memory: PersonalMemory) -> dict[str, Any]:
-    """Permanently purge memory content, indexes, stories, and references."""
+def purge_memory_set(db: Session, owner_id: str, memory_ids: set[str]) -> dict[str, Any]:
+    rows = db.scalars(select(PersonalMemory).where(PersonalMemory.owner_id == owner_id,
+        PersonalMemory.id.in_(memory_ids))).all() if memory_ids else []
+    ids = {row.id for row in rows}
+    for row in rows:
+        if row.kind == "preference":
+            _block_preference_topic(db, owner_id, row.content, "deleted", row.topic_key)
+    story_ids = sorted({sid for mid in ids for sid in _story_ids_for_memory(db, mid)})
+    scrubbed = scrub_memory_references(db, owner_id, ids, scrub_capture_provenance=True)
+    db.execute(delete(MemoryEmbedding).where(MemoryEmbedding.memory_id.in_(ids)))
+    deleted_stories = purge_stories(db, story_ids, owner_id)
+    db.execute(delete(PersonalMemory).where(PersonalMemory.owner_id == owner_id, PersonalMemory.id.in_(ids)))
+    revision = bump_memory_revision(db, owner_id)
+    return {"memory_ids": sorted(ids), "story_ids": deleted_stories, "revision": revision, **scrubbed}
 
-    memory_ids = _memory_chain_ids(db, memory.id)
-    chain = db.scalars(
-        select(PersonalMemory).where(
-            PersonalMemory.owner_id == memory.owner_id,
-            PersonalMemory.id.in_(memory_ids),
-        )
-    ).all()
-    for prior in chain:
-        if prior.kind == "preference":
-            _block_preference_topic(db, memory.owner_id, prior.content, "deleted", prior.topic_key)
-    story_ids: list[str] = []
-    for memory_id in memory_ids:
-        story_ids.extend(_story_ids_for_memory(db, memory_id))
-    story_ids = sorted(set(story_ids))
-    scrubbed = scrub_memory_references(
-        db, memory.owner_id, memory_ids, scrub_capture_provenance=True
-    )
-    db.execute(delete(MemoryEmbedding).where(MemoryEmbedding.memory_id.in_(memory_ids)))
-    purge_stories(db, story_ids)
-    db.execute(delete(PersonalMemory).where(PersonalMemory.id.in_(memory_ids)))
-    bump_memory_revision(db, memory.owner_id)
-    return {"memory_id": memory.id, "memory_ids": sorted(memory_ids), "story_ids": story_ids, **scrubbed}
+
+def purge_memory(db: Session, memory: PersonalMemory) -> dict[str, Any]:
+    result = purge_memory_set(db, memory.owner_id, _memory_chain_ids(db, memory.id))
+    return {"memory_id": memory.id, **result}
 
 
 def memory_snapshot_valid(db: Session, owner_id: str, source_ids: list[str] | set[str]) -> bool:
