@@ -26,6 +26,10 @@ STALE_CACHE_SECONDS = 21_600
 MAX_TOTAL_REQUEST_SECONDS = 8.0
 
 
+class ProviderParseError(ValueError):
+    """The public page was received but could not be read as listings."""
+
+
 @dataclass(frozen=True)
 class Provider:
     name: str
@@ -289,7 +293,7 @@ class CommunitySearch:
                     raise ValueError("Provider response host did not match allowlist")
                 content_type = response.headers.get("content-type", "").lower()
                 if "text/html" not in content_type:
-                    raise ValueError("Provider did not return HTML")
+                    raise ProviderParseError("Provider did not return HTML")
                 chunks: list[bytes] = []
                 total = 0
                 for chunk in response.iter_bytes():
@@ -301,7 +305,10 @@ class CommunitySearch:
                     chunks.append(chunk)
                 if time.monotonic() - started > MAX_TOTAL_REQUEST_SECONDS:
                     raise ValueError("Provider request exceeded the total time limit")
-                return provider.parser(b"".join(chunks).decode("utf-8", errors="replace"), checked)
+                try:
+                    return provider.parser(b"".join(chunks).decode("utf-8", errors="replace"), checked)
+                except ValueError as exc:
+                    raise ProviderParseError(str(exc)) from exc
 
     def search(self, *, listing_type: str, topic: str | None = None, area: str | None = None) -> dict[str, object]:
         now = datetime.now(timezone.utc)
@@ -317,25 +324,26 @@ class CommunitySearch:
             if cached and now - cached[0] <= timedelta(seconds=CACHE_SECONDS):
                 source_checked, candidates = cached
                 any_cache = True
-                source_states.append({"name": provider.name, "url": provider.url, "state": "cache", "checked_at": source_checked, "error": None})
+                source_states.append({"name": provider.name, "url": provider.url, "state": "cache", "checked_at": source_checked, "error": None, "error_kind": None})
             else:
                 try:
                     fetched = self._fetch(provider, now)
                     with self._lock:
                         self._cache[key] = (now, fetched)
-                    source_states.append({"name": provider.name, "url": provider.url, "state": "live", "checked_at": now, "error": None})
+                    source_states.append({"name": provider.name, "url": provider.url, "state": "live", "checked_at": now, "error": None, "error_kind": None})
                     candidates = fetched
                     any_live = True
                     source_checked = now
                 except Exception as exc:
+                    error_kind = "parse_failed" if isinstance(exc, ProviderParseError) else "source_unavailable"
                     with self._lock:
                         cached = self._cache.get(key)
                     if cached and now - cached[0] <= timedelta(seconds=STALE_CACHE_SECONDS):
                         source_checked, candidates = cached
                         any_cache = True
-                        source_states.append({"name": provider.name, "url": provider.url, "state": "cache", "checked_at": source_checked, "error": str(exc)[:180]})
+                        source_states.append({"name": provider.name, "url": provider.url, "state": "cache", "checked_at": source_checked, "error": str(exc)[:180], "error_kind": error_kind})
                     else:
-                        source_states.append({"name": provider.name, "url": provider.url, "state": "unavailable", "checked_at": None, "error": str(exc)[:180]})
+                        source_states.append({"name": provider.name, "url": provider.url, "state": "unavailable", "checked_at": None, "error": str(exc)[:180], "error_kind": error_kind})
                         continue
             for candidate in candidates:
                 if candidate.get("event_end_at") and candidate["event_end_at"].date() < now.astimezone(ZoneInfo("Asia/Hong_Kong")).date():
@@ -348,17 +356,25 @@ class CommunitySearch:
                 results.append({k: v for k, v in candidate.items() if not k.startswith("_")})
                 if len(results) >= MAX_RESULTS_PER_SOURCE:
                     break
-        if any_live:
+        reason = None
+        if not selected:
+            state = "unavailable"
+            reason = "sources_disabled"
+            message = "Community activity search is not enabled yet. Visit the provider websites directly."
+        elif any_live:
             state = "live"
+            reason = "no_matches" if not results else None
             message = None if results else "The provider pages were searched, but no current matching listings were found."
         elif any_cache:
             state = "cache"
+            reason = "stale_cache" if any(source.get("error") for source in source_states) else ("no_matches" if not results else None)
             message = None if results else "No current matches were found in the saved provider results. Search sources could not be refreshed."
         else:
             state = "unavailable"
+            reason = "parse_failed" if all(source.get("error_kind") == "parse_failed" for source in source_states) else "source_unavailable"
             message = "Community sources could not be reached, so no current result can be confirmed."
         retrieval_times = [source.get("checked_at") for source in source_states if source.get("checked_at") is not None]
-        return {"items": results, "no_results": not results, "message": message, "search_state": state, "checked_at": max(retrieval_times) if retrieval_times else None, "requested_at": now, "sources": source_states}
+        return {"items": results, "no_results": not results, "message": message, "search_state": state, "search_reason": reason, "checked_at": max(retrieval_times) if retrieval_times else None, "requested_at": now, "sources": source_states}
 
 
 _TOPIC_SYNONYMS = {

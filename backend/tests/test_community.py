@@ -35,7 +35,7 @@ def _app(path: Path):
 
 
 class _UnavailableCommunitySearch:
-    def search(self, *, listing_type: str, topic: str | None = None, area: str | None = None) -> dict:
+    def search(self, *, listing_type: str, topic: str | None = None, area: str | None = None, **kwargs) -> dict:
         from datetime import datetime, timezone
         return {
             "items": [], "no_results": True,

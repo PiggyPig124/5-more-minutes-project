@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings
-from .community_search import CommunitySearch
+from .smartplay_community_search import SmartPlayCommunitySearch
 from .db import initialize_database, make_engine, make_session_factory
 from .group_realtime import GroupRealtimeHub
 from .orchestrator import ConversationOrchestrator
@@ -87,9 +87,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.group_realtime = GroupRealtimeHub()
     app.state.care_lock = asyncio.Lock()
     app.state.orchestrator = ConversationOrchestrator(settings)
-    # Source adapters are kept for review and synthetic tests. Neither site's
-    # automated reuse has been approved, so a normal deployment fetches none.
-    app.state.community_search = CommunitySearch(providers=())
+    # The official public JSON snapshot is enabled; legacy HTML adapters remain
+    # unregistered. User queries and identity are only used for local filtering.
+    app.state.community_search = SmartPlayCommunitySearch()
     # Guest transcripts live only in this process and are removed after
     # inactivity or an explicit DELETE. They never create database rows.
     app.state.guest_sessions = {}

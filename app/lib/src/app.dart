@@ -25,6 +25,7 @@ import 'answer_card_screen.dart';
 import 'answer_card_editor.dart';
 import 'answer_card_sharing_controller.dart';
 import 'answer_card_sharing_screen.dart';
+import 'community_search_notice.dart';
 
 final apiProvider = Provider<AnxinApi>((ref) => RestApiClient());
 final localStoreProvider = Provider<LocalStore>((ref) => SecureLocalStore());
@@ -720,6 +721,7 @@ class CommunityScreen extends ConsumerStatefulWidget {
 class _CommunityScreenState extends ConsumerState<CommunityScreen> {
   final _area = TextEditingController();
   String _topic = '';
+  String _targetGroup = 'elderly';
 
   @override
   void dispose() {
@@ -730,6 +732,10 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
   @override
   void initState() {
     super.initState();
+    final initial = ref.read(appControllerProvider);
+    _topic = initial.communityTopic;
+    _targetGroup = initial.communityTargetGroup;
+    _area.text = initial.communityArea;
     Future<void>.microtask(
         () => ref.read(appControllerProvider).refreshCommunity());
   }
@@ -785,8 +791,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 6),
               Text(
-                  tr(context, '搜尋社區機構公開的活動和服務。搜尋只會傳送一般主題與地區；報名前請向主辦機構確認。',
-                      'Search public pages from community providers. Only a general topic and area are searched; confirm details with the organizer before attending.'),
+                  tr(context, '資料來自康文署公開快照；主題及地區只在安心伴內篩選，報名前請向主辦機構確認。', 'Activities come from the LCSD public snapshot. Topic and district filters stay within Echo; confirm details with the organizer before attending.'),
                   style: Theme.of(context).textTheme.bodyLarge),
               const SizedBox(height: 18),
               SectionTitle(title: tr(context, '發揮所長', 'Share your skills')),
@@ -867,12 +872,15 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                       .any((item) => item.status == 'confirmed'))
                 EmptyCard(
                     icon: Icons.search_off_rounded,
-                    message: tr(context, '目前沒有找到相關機會。稍後可以重新搜尋。',
-                        'No matching opportunities were found. You can search again later.')),
+                    message: tr(context, '義工機會搜尋尚未接入資料來源。', 'Volunteer opportunity search is not enabled yet.')),
               const SizedBox(height: 22),
               SectionTitle(
-                  title:
-                      tr(context, '搜尋社區機會', 'Search community opportunities')),
+                  title: tr(context, '搜尋康體活動', 'Search community activities')),
+              const SizedBox(height: 9),
+              Text(tr(
+                  context,
+                  '康文署 SmartPLAY 公開康體活動資料。此處是活動資訊；報名資格、日期及名額請查看官方詳情。',
+                  'Public LCSD SmartPLAY recreation activities. Check official details for eligibility, dates and enrolment availability.')),
               const SizedBox(height: 9),
               Card(
                   child: Padding(
@@ -882,75 +890,108 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                           children: [
                             DropdownButtonFormField<String>(
                               initialValue: _topic,
+                              isExpanded: true,
+                              itemHeight: null,
                               decoration: InputDecoration(
                                   labelText: tr(context, '活動主題', 'Topic')),
                               items: [
-                                DropdownMenuItem(
-                                    value: '',
-                                    child: Text(
-                                        tr(context, '所有主題', 'All topics'))),
-                                DropdownMenuItem(
-                                    value: 'tailoring',
-                                    child:
-                                        Text(tr(context, '縫紉', 'Tailoring'))),
-                                DropdownMenuItem(
-                                    value: 'cooking',
-                                    child: Text(tr(context, '烹飪', 'Cooking'))),
-                                DropdownMenuItem(
-                                    value: 'gardening',
-                                    child:
-                                        Text(tr(context, '園藝', 'Gardening'))),
-                                DropdownMenuItem(
-                                    value: 'teaching',
-                                    child: Text(tr(context, '教學', 'Teaching'))),
-                                DropdownMenuItem(
-                                    value: 'knitting',
-                                    child: Text(tr(context, '編織', 'Knitting'))),
-                                DropdownMenuItem(
-                                    value: 'woodworking',
-                                    child:
-                                        Text(tr(context, '木工', 'Woodworking'))),
+                                for (final topic in const [
+                                  ('', '所有主題', 'All topics'),
+                                  ('tai_chi', '太極', 'Tai Chi'),
+                                  ('dance', '舞蹈', 'Dance'),
+                                  ('table_tennis', '乒乓球', 'Table tennis'),
+                                  ('badminton', '羽毛球', 'Badminton'),
+                                  ('swimming', '游泳', 'Swimming'),
+                                  ('fitness', '健體', 'Fitness'),
+                                  ('yoga', '瑜伽', 'Yoga'),
+                                  ('hiking', '遠足', 'Hiking'),
+                                  ('tailoring', '縫紉', 'Tailoring'),
+                                  ('cooking', '烹飪', 'Cooking'),
+                                  ('gardening', '園藝', 'Gardening'),
+                                  ('teaching', '教學', 'Teaching'),
+                                  ('knitting', '編織', 'Knitting'),
+                                  ('woodworking', '木工', 'Woodworking'),
+                                ])
+                                  DropdownMenuItem(
+                                      value: topic.$1,
+                                      child: Text(
+                                          tr(context, topic.$2, topic.$3))),
                               ],
-                              onChanged: (value) =>
-                                  setState(() => _topic = value ?? ''),
+                              onChanged: (value) {
+                                setState(() => _topic = value ?? '');
+                                controller.searchCommunity(
+                                    topic: _topic,
+                                    area: _area.text,
+                                    targetGroup: _targetGroup);
+                              },
+                            ),
+                            const SizedBox(height: 10),
+                            DropdownButtonFormField<String>(
+                              initialValue: _targetGroup,
+                              isExpanded: true,
+                              itemHeight: null,
+                              decoration: InputDecoration(
+                                  labelText:
+                                      tr(context, '適用對象', 'Participants')),
+                              items: [
+                                DropdownMenuItem(
+                                    value: 'elderly',
+                                    child: Text(tr(
+                                        context, '長者適用', 'Elderly suitable'))),
+                                DropdownMenuItem(
+                                    value: 'all',
+                                    child: Text(tr(
+                                        context, '所有人', 'All participants'))),
+                              ],
+                              onChanged: (value) {
+                                setState(
+                                    () => _targetGroup = value ?? 'elderly');
+                                controller.searchCommunity(
+                                    topic: _topic,
+                                    area: _area.text,
+                                    targetGroup: _targetGroup);
+                              },
                             ),
                             const SizedBox(height: 10),
                             TextField(
-                              controller: _area,
-                              textInputAction: TextInputAction.search,
-                              maxLength: 50,
-                              decoration: InputDecoration(
-                                  labelText: tr(context, '香港地區（可留空）',
-                                      'Hong Kong area (optional)'),
-                                  hintText: tr(context, '例如：深水埗',
-                                      'For example: Sham Shui Po')),
-                              onSubmitted: (_) => controller.searchCommunity(
-                                  topic: _topic, area: _area.text),
-                            ),
+                                controller: _area,
+                                textInputAction: TextInputAction.search,
+                                maxLength: 50,
+                                decoration: InputDecoration(
+                                    labelText: tr(context, '香港地區（可留空）',
+                                        'Hong Kong area (optional)'),
+                                    hintText: tr(context, '例如：深水埗',
+                                        'For example: Sham Shui Po')),
+                                onChanged: (_) => setState(() {}),
+                                onSubmitted: (_) => controller.searchCommunity(
+                                    topic: _topic,
+                                    area: _area.text,
+                                    targetGroup: _targetGroup)),
                             const SizedBox(height: 10),
                             FilledButton.icon(
                                 onPressed: controller.communitySearchLoading
                                     ? null
                                     : () => controller.searchCommunity(
-                                        topic: _topic, area: _area.text),
+                                        topic: _topic,
+                                        area: _area.text,
+                                        targetGroup: _targetGroup),
                                 icon: const Icon(Icons.search_rounded),
-                                label: Text(tr(context, '搜尋官方及社區來源',
-                                    'Search provider sources'))),
+                                label: Text(tr(context, '搜尋康體活動',
+                                    'Search community activities'))),
                             if (controller.communitySearchLoading) ...[
                               const SizedBox(height: 12),
                               const LinearProgressIndicator(),
                               const SizedBox(height: 6),
-                              Text(tr(context, '正在搜尋公開來源…',
-                                  'Searching public sources…')),
+                              Text(tr(context, '正在載入公開活動資料…',
+                                  'Loading public activity information…')),
                             ],
                           ]))),
-              if (controller.communitySearchMessage.isNotEmpty) ...[
+              if (!controller.communitySearchLoading) ...[
                 const SizedBox(height: 10),
-                EmptyCard(
-                    icon: controller.communitySearchState == 'unavailable'
-                        ? Icons.cloud_off_rounded
-                        : Icons.info_outline_rounded,
-                    message: controller.communitySearchMessage),
+                CommunitySearchNotice(
+                    reason: controller.communitySearchReason,
+                    state: controller.communitySearchState,
+                    hasItems: controller.communityActivities.isNotEmpty),
               ],
               if (controller.communityCheckedAt != null ||
                   controller.communitySearchState != 'unavailable') ...[
@@ -958,8 +999,8 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                 Text(
                     tr(
                         context,
-                        '搜尋狀態：${controller.communitySearchState == 'live' ? '即時搜尋' : controller.communitySearchState == 'cache' ? '快取結果' : '來源無法連線'}${controller.communityCheckedAt == null ? '' : ' · ${_dateLabel(context, controller.communityCheckedAt)}'}',
-                        'Search: ${controller.communitySearchState == 'live' ? 'live' : controller.communitySearchState == 'cache' ? 'cached' : 'sources unavailable'}${controller.communityCheckedAt == null ? '' : ' · ${_dateLabel(context, controller.communityCheckedAt)}'}'),
+                        '資料狀態：${controller.communitySearchState == 'live' ? '來源已更新' : controller.communitySearchState == 'cache' ? '快取資料' : '來源無法連線'}${controller.communityCheckedAt == null ? '' : ' · 擷取時間 ${controller.communityCheckedAt!.toLocal().toIso8601String()}'}',
+                        'Data: ${controller.communitySearchState == 'live' ? 'source refreshed' : controller.communitySearchState == 'cache' ? 'cached' : 'sources unavailable'}${controller.communityCheckedAt == null ? '' : ' · Retrieved ${controller.communityCheckedAt!.toLocal().toIso8601String()}'}'),
                     style: Theme.of(context).textTheme.bodySmall),
               ],
               if (controller.communitySources.isNotEmpty) ...[
@@ -967,37 +1008,55 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                 Text(
                     tr(
                         context,
-                        '已查來源：${controller.communitySources.map((s) => '${s.name}（${s.state == 'live' ? '即時' : s.state == 'cache' ? '快取' : '無法連線'}）').join('、')}',
-                        'Sources checked: ${controller.communitySources.map((s) => '${s.name} (${s.state})').join(', ')}'),
+                        '資料來源：${controller.communitySources.map((source) => '${source.name}（${source.state == 'live' ? '已更新' : source.state == 'cache' ? '快取' : '無法連線'}）').join('、')}',
+                        'Sources: ${controller.communitySources.map((source) => '${source.name} (${source.state == 'live' ? 'refreshed' : source.state == 'cache' ? 'cached' : 'unavailable'})').join(', ')}'),
                     style: Theme.of(context).textTheme.bodySmall),
               ],
+              if (controller.communityTotalCount != null) ...[
+                const SizedBox(height: 8),
+                Text(tr(
+                    context,
+                    '已顯示 ${controller.communityActivities.length} / ${controller.communityTotalCount} 項活動',
+                    'Showing ${controller.communityActivities.length} of ${controller.communityTotalCount} activities')),
+              ],
               const SizedBox(height: 9),
-              if (controller.communityActivities.isEmpty &&
-                  !controller.communitySearchLoading)
-                EmptyCard(
-                    icon: Icons.event_busy_rounded,
-                    message: controller.communitySearchState == 'unavailable'
-                        ? tr(context, '目前無法連接搜尋來源。請檢查網絡後重試。',
-                            'Search sources are unavailable. Check your connection and retry.')
-                        : tr(context, '這次搜尋沒有找到符合條件的活動。可更改主題或地區再搜尋。',
-                            'No matching activities were found. Try another topic or area.'))
-              else
-                ...controller.communityActivities.map((item) =>
-                    CommunityListingCard(
-                        title: item.title,
-                        summary: item.summary,
-                        organization: item.organization,
-                        area: item.area,
-                        sourceName: item.sourceName,
-                        lastCheckedAt: item.lastCheckedAt,
-                        sourceUrl: item.sourceUrl,
-                        kind: item.kind,
-                        eventStartAt: item.eventStartAt,
-                        eventEndAt: item.eventEndAt,
-                        dateText: item.dateText,
-                        eligibility: item.eligibility,
-                        registrationUrl: item.registrationUrl,
-                        availabilityNote: item.availabilityNote)),
+              ...controller.communityActivities.map((item) => CommunityListingCard(
+                  title: tr(context, item.title, item.titleEn ?? item.title),
+                  summary:
+                      tr(context, item.summary, item.summaryEn ?? item.summary),
+                  organization: tr(context, item.organization,
+                      item.organizationEn ?? item.organization),
+                  area: tr(context, item.area, item.areaEn ?? item.area),
+                  sourceName: tr(context, item.sourceName,
+                      item.sourceNameEn ?? item.sourceName),
+                  lastCheckedAt: item.lastCheckedAt,
+                  sourceUrl: tr(context, item.sourceUrl ?? '',
+                              item.sourceUrlEn ?? item.sourceUrl ?? '')
+                          .isEmpty
+                      ? null
+                      : tr(context, item.sourceUrl ?? '',
+                          item.sourceUrlEn ?? item.sourceUrl ?? ''),
+                  kind: item.kind,
+                  eventStartAt: item.eventStartAt,
+                  eventEndAt: item.eventEndAt,
+                  dateText: tr(
+                      context, item.dateText, item.dateTextEn ?? item.dateText),
+                  eligibility: tr(context, item.eligibility,
+                      item.eligibilityEn ?? item.eligibility),
+                  registrationUrl: item.registrationUrl,
+                  availabilityNote: tr(context, item.availabilityNote,
+                      item.availabilityNoteEn ?? item.availabilityNote))),
+              if (controller.communityHasMore)
+                Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: OutlinedButton.icon(
+                        onPressed: controller.communitySearchLoading ||
+                                _area.text.trim() != controller.communityArea
+                            ? null
+                            : controller.loadMoreCommunity,
+                        icon: const Icon(Icons.expand_more),
+                        label: Text(
+                            tr(context, '載入更多活動', 'Load more activities')))),
               if (controller.errorMessage != null) ...[
                 const SizedBox(height: 12),
                 ErrorBanner(
@@ -1034,6 +1093,12 @@ class CommunityListingCard extends StatelessWidget {
   final String? registrationUrl;
   final String availabilityNote;
   final String kind;
+
+  // Public recreation schedules use Hong Kong calendar dates.
+  static String _hongKongDateLabel(DateTime value) {
+    final date = value.toUtc().add(const Duration(hours: 8));
+    return '${date.year}/${date.month}/${date.day}';
+  }
   @override
   Widget build(BuildContext context) => Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1044,7 +1109,12 @@ class CommunityListingCard extends StatelessWidget {
             Text(title, style: Theme.of(context).textTheme.titleMedium),
             if (kind.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(kind.replaceAll('_', ' '),
+              Text(
+                  kind == 'activity'
+                      ? tr(context, '康體活動', 'Recreation activity')
+                      : kind == 'opportunity'
+                          ? tr(context, '社區機會', 'Community opportunity')
+                          : kind.replaceAll('_', ' '),
                   style: Theme.of(context).textTheme.labelMedium),
             ],
             if (summary.isNotEmpty) ...[
@@ -1057,11 +1127,13 @@ class CommunityListingCard extends StatelessWidget {
             ],
             if (eventStartAt != null || dateText.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(eventStartAt != null
+              Text(dateText.isNotEmpty
+                  ? tr(context, '活動日程：$dateText', 'Schedule: $dateText')
+                  : eventStartAt != null
                   ? tr(
                       context,
-                      '時間：${_dateLabel(context, eventStartAt)}${eventEndAt == null ? '' : ' 至 ${_dateLabel(context, eventEndAt)}'}',
-                      'When: ${_dateLabel(context, eventStartAt)}${eventEndAt == null ? '' : ' – ${_dateLabel(context, eventEndAt)}'}')
+                      '時間：${_hongKongDateLabel(eventStartAt!)}${eventEndAt == null ? '' : ' 至 ${_hongKongDateLabel(eventEndAt!)}'}',
+                      'When: ${_hongKongDateLabel(eventStartAt!)}${eventEndAt == null ? '' : ' – ${_hongKongDateLabel(eventEndAt!)}'}')
                   : tr(context, '來源日期：$dateText', 'Source date: $dateText'))
             ],
             if (eligibility.isNotEmpty) ...[
@@ -1083,12 +1155,24 @@ class CommunityListingCard extends StatelessWidget {
                     '資料來源：$sourceName${lastCheckedAt == null ? '' : ' · 擷取日期 ${_dateLabel(context, lastCheckedAt)}'}',
                     'Source: $sourceName${lastCheckedAt == null ? '' : ' · Retrieved ${_dateLabel(context, lastCheckedAt)}'}'),
                 style: Theme.of(context).textTheme.bodySmall),
+            if (kind == 'activity' && sourceName.contains('DATA.GOV.HK')) ...[
+              const SizedBox(height: 6),
+              Text(
+                  tr(context, '資料版權屬香港特別行政區政府及康文署；來源 DATA.GOV.HK。',
+                      'Data © HKSAR Government and LCSD; source DATA.GOV.HK.'),
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
             if (sourceUrl != null)
               TextButton.icon(
                   onPressed: () => launchUrl(Uri.parse(sourceUrl!),
                       mode: LaunchMode.externalApplication),
                   icon: const Icon(Icons.open_in_new_rounded),
-                  label: Text(tr(context, '查看來源', 'View source'))),
+                  label: Text(tr(
+                      context,
+                      kind == 'activity' ? '查看官方活動詳情' : '查看來源',
+                      kind == 'activity'
+                          ? 'View official activity details'
+                          : 'View source'))),
             if (registrationUrl != null)
               FilledButton.tonalIcon(
                   onPressed: () => launchUrl(Uri.parse(registrationUrl!),

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pathlib import Path
 
 from app.community_search import CACHE_SECONDS, CommunitySearch, PROVIDERS, _hkcmis, _jcvt, explicit_community_query, topic_from_query
+from app.smartplay_community_search import SmartPlayCommunitySearch
 from app.config import Settings
 from app.main import create_app
 
@@ -28,9 +29,10 @@ def test_hkcmis_extracts_visible_dates_filters_expired_and_marks_not_guaranteed(
     assert "not guaranteed" in rows[0]["availability_note"]
 
 
-def test_default_app_does_not_fetch_unapproved_community_sources(tmp_path: Path) -> None:
+def test_disabled_legacy_sources_do_not_fetch(tmp_path: Path) -> None:
     app = create_app(Settings(database_url=f"sqlite:///{tmp_path / 'no-sources.db'}", auth_secret="no-sources-test", demo_mode=True))
-    assert app.state.community_search.providers == ()
+    app.state.community_search = SmartPlayCommunitySearch(enabled=False)
+    assert not app.state.community_search.enabled
     with TestClient(app) as client:
         response = client.get("/community/activities")
         assert response.status_code == 200

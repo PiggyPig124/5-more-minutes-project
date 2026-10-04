@@ -221,6 +221,16 @@ abstract interface class GuestResourceApi {
       {required String query, int? limit});
 }
 
+abstract interface class PagedCommunityApi {
+  Future<CommunitySearchResult<CommunityActivity>> searchCommunityActivityPage({
+    String? topic,
+    String? area,
+    String targetGroup = 'elderly',
+    int offset = 0,
+    int limit = 20,
+  });
+}
+
 abstract interface class CommunityApi {
   Future<List<CommunityActivity>> listCommunityActivities();
   Future<CommunitySearchResult<CommunityActivity>> searchCommunityActivities(
@@ -328,6 +338,7 @@ class RestApiClient
         GuestApi,
         ConsentApi,
         CommunityApi,
+        PagedCommunityApi,
         MemorySaveApi,
         MemoryControlApi,
         StoryEditApi,
@@ -1125,6 +1136,28 @@ class RestApiClient
         },
         memoryRevision: expectedRevision);
     return _requireVersionedMemory(body);
+  }
+
+  @override
+  Future<CommunitySearchResult<CommunityActivity>> searchCommunityActivityPage({
+    String? topic,
+    String? area,
+    String targetGroup = 'elderly',
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    final params = <String, String>{
+      if (topic != null && topic.trim().isNotEmpty) 'topic': topic.trim(),
+      if (area != null && area.trim().isNotEmpty) 'area': area.trim(),
+      'target_group': targetGroup,
+      'offset': '$offset',
+      'limit': '$limit',
+    };
+    final map = mapFromJson(await _request('GET',
+            '/community/activities?${Uri(queryParameters: params).query}')) ??
+        const <String, dynamic>{};
+    return CommunitySearchResult<CommunityActivity>.fromJson(
+        map, CommunityActivity.fromJson);
   }
 
   @override

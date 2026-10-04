@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..community_models import CommunityListing, CommunitySkill
-from ..community_search import CommunitySearch
+from ..smartplay_community_search import SPORT_TOPICS
 from ..db import get_db
 from ..dependencies import require_elder
 from ..memory_consent import memory_consent_enabled
@@ -80,6 +80,15 @@ class ListingOut(BaseModel):
     date_text: str | None = None
     availability_note: str
     verified: bool = False
+    title_en: str | None = None
+    summary_en: str | None = None
+    organization_en: str | None = None
+    area_en: str | None = None
+    date_text_en: str | None = None
+    eligibility_en: str | None = None
+    availability_note_en: str | None = None
+    source_name_en: str | None = None
+    source_url_en: str | None = None
 
 
 class CommunitySourceOut(BaseModel):
@@ -88,6 +97,7 @@ class CommunitySourceOut(BaseModel):
     state: Literal["live", "cache", "unavailable"]
     checked_at: datetime | None
     error: str | None = None
+    error_kind: Literal["source_unavailable", "parse_failed"] | None = None
 
 
 class ListingList(BaseModel):
@@ -95,9 +105,14 @@ class ListingList(BaseModel):
     no_results: bool
     message: str | None = None
     search_state: Literal["live", "cache", "unavailable"]
+    search_reason: Literal["sources_disabled", "source_unavailable", "parse_failed", "no_matches", "stale_cache"] | None = None
     checked_at: datetime | None
     requested_at: datetime
     sources: list[CommunitySourceOut]
+    total_count: int = 0
+    offset: int = 0
+    limit: int = 20
+    has_more: bool = False
 
 
 def _require_consent(db: Session, owner_id: str) -> None:
@@ -178,14 +193,20 @@ def browse_activities(
     request: Request,
     topic: str | None = Query(default=None, max_length=40),
     area: str | None = Query(default=None, max_length=50),
+    target_group: Literal["all", "elderly"] = Query(default="all"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=40),
 ) -> ListingList:
     """Search allowlisted public activity providers and locally filter results."""
-    allowed_topics = {"tailoring", "sewing", "cooking", "gardening", "teaching", "knitting", "woodworking", "health"}
+    allowed_topics = set(SPORT_TOPICS)
     if topic is not None and topic.casefold() not in allowed_topics:
         raise HTTPException(status_code=422, detail=f"topic must be one of: {', '.join(sorted(allowed_topics))}")
     if area is not None and (not area.strip() or any(ord(char) < 32 for char in area)):
         raise HTTPException(status_code=422, detail="area must be a plain district name")
-    result = request.app.state.community_search.search(listing_type="activity", topic=topic, area=area.strip() if area else None)
+    result = request.app.state.community_search.search(
+        listing_type="activity", topic=topic, area=area.strip() if area else None,
+        target_group=target_group, offset=offset, limit=limit,
+    )
     return ListingList(**result)
 
 

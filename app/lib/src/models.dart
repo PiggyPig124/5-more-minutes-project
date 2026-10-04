@@ -795,6 +795,15 @@ class CommunityActivity {
       this.organization = '',
       this.area = '',
       this.sourceUrl,
+      this.titleEn,
+      this.summaryEn,
+      this.organizationEn,
+      this.areaEn,
+      this.dateTextEn,
+      this.eligibilityEn,
+      this.availabilityNoteEn,
+      this.sourceNameEn,
+      this.sourceUrlEn,
       this.sourceName = '',
       this.lastCheckedAt,
       this.kind = '',
@@ -816,6 +825,15 @@ class CommunityActivity {
   final bool verified;
   final String availabilityNote;
   final String? sourceUrl;
+  final String? titleEn,
+      summaryEn,
+      organizationEn,
+      areaEn,
+      dateTextEn,
+      eligibilityEn,
+      availabilityNoteEn,
+      sourceNameEn,
+      sourceUrlEn;
   final DateTime? lastCheckedAt;
   final DateTime? eventStartAt, eventEndAt;
   final String dateText;
@@ -823,6 +841,15 @@ class CommunityActivity {
   factory CommunityActivity.fromJson(Map<String, dynamic> json) =>
       CommunityActivity(
         id: _string(json, const ['id']) ?? '',
+        titleEn: _string(json, const ['title_en']),
+        summaryEn: _string(json, const ['summary_en']),
+        organizationEn: _string(json, const ['organization_en']),
+        areaEn: _string(json, const ['area_en']),
+        dateTextEn: _string(json, const ['date_text_en']),
+        eligibilityEn: _string(json, const ['eligibility_en']),
+        availabilityNoteEn: _string(json, const ['availability_note_en']),
+        sourceNameEn: _string(json, const ['source_name_en']),
+        sourceUrlEn: _string(json, const ['source_url_en']),
         title: _string(json, const ['title']) ?? '',
         summary: _string(json, const ['summary', 'description']) ?? '',
         organization: _string(json, const ['organization']) ?? '',
@@ -868,8 +895,17 @@ class CommunitySearchResult<T> {
       this.checkedAt,
       this.sources = const [],
       this.noResults = false,
-      this.message = ''});
+      this.message = '',
+      this.searchReason,
+      this.totalCount,
+      this.offset = 0,
+      this.limit = 20,
+      this.hasMore = false});
   final List<T> items;
+  final int? totalCount;
+  final int offset, limit;
+  final bool hasMore;
+  final String? searchReason;
   final String searchState;
   final DateTime? checkedAt;
   final List<CommunitySearchSource> sources;
@@ -880,6 +916,12 @@ class CommunitySearchResult<T> {
       CommunitySearchResult<T>(
         items: mapsFromJson(json['items']).map(parseItem).toList(),
         searchState: _string(json, const ['search_state']) ?? 'unavailable',
+        searchReason: _string(json, const ['search_reason']),
+        totalCount:
+            json['total_count'] is int ? json['total_count'] as int : null,
+        offset: json['offset'] is int ? json['offset'] as int : 0,
+        limit: json['limit'] is int ? json['limit'] as int : 20,
+        hasMore: json['has_more'] == true,
         checkedAt: _date(json, const ['checked_at']),
         sources: mapsFromJson(json['sources'])
             .map(CommunitySearchSource.fromJson)

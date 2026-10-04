@@ -695,10 +695,15 @@ class AppController extends ChangeNotifier {
   List<CommunitySearchSource> communitySources = const [];
   String communitySearchState = 'unavailable';
   String communitySearchMessage = '';
+  String? communitySearchReason = 'not_searched';
   DateTime? communityCheckedAt;
   bool communitySearchLoading = false;
   String communityTopic = '';
   String communityArea = '';
+  String communityTargetGroup = 'elderly';
+  bool communityHasMore = false;
+  int? communityTotalCount;
+  int _communityNextOffset = 0;
   bool communityNoResults = false;
   List<CatalogActivity> catalogActivities = const [];
   List<CatalogActivity> catalogRecommendations = const [];
@@ -982,10 +987,15 @@ class AppController extends ChangeNotifier {
       opportunityCheckedAt = null;
       opportunitySearchMessage = '';
       communityActivities = const [];
+      communityHasMore = false;
+      communityTotalCount = null;
+      _communityNextOffset = 0;
+      communitySearchLoading = false;
       communitySources = const [];
       communitySearchState = 'unavailable';
       communityCheckedAt = null;
       communitySearchMessage = '';
+      communitySearchReason = 'not_searched';
       guestHelpResources = const [];
       savingMemorySuggestionIds.clear();
       savedMemorySuggestionIds.clear();
@@ -1435,49 +1445,92 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> searchCommunity({String? topic, String? area}) async {
-    if (api is! CommunityApi) return;
+  Future<void> searchCommunity(
+      {String? topic, String? area, String? targetGroup}) async {
+    if (api is! CommunityApi && api is! PagedCommunityApi) return;
+    communityTopic = (topic ?? communityTopic).trim();
+    communityArea = (area ?? communityArea).trim();
+    communityTargetGroup = targetGroup ?? communityTargetGroup;
+    communityActivities = const [];
+    communitySources = const [];
+    communityHasMore = false;
+    communityTotalCount = null;
+    _communityNextOffset = 0;
+    await _searchCommunityPage(append: false);
+  }
+
+  Future<void> loadMoreCommunity() async {
+    if (api is! PagedCommunityApi ||
+        communitySearchLoading ||
+        !communityHasMore) {
+      return;
+    }
+    await _searchCommunityPage(append: true);
+  }
+
+  Future<void> _searchCommunityPage({required bool append}) async {
     final generation = _sessionGeneration;
     final requestId = ++_communityGeneration;
     final ownerId = user?.id;
-    final normalizedTopic = (topic ?? communityTopic).trim();
-    final normalizedArea = (area ?? communityArea).trim();
-    communityTopic = normalizedTopic;
-    communityArea = normalizedArea;
+    bool current() =>
+        generation == _sessionGeneration &&
+        user?.id == ownerId &&
+        requestId == _communityGeneration;
     communitySearchLoading = true;
     communitySearchMessage = '';
+    communitySearchReason = null;
     notifyListeners();
     try {
-      final result = await (api as CommunityApi).searchCommunityActivities(
-          topic: normalizedTopic.isEmpty ? null : normalizedTopic,
-          area: normalizedArea.isEmpty ? null : normalizedArea);
-      if (generation != _sessionGeneration ||
-          user?.id != ownerId ||
-          requestId != _communityGeneration) {
-        return;
+      final result = api is PagedCommunityApi
+          ? await (api as PagedCommunityApi).searchCommunityActivityPage(
+              topic: communityTopic.isEmpty ? null : communityTopic,
+              area: communityArea.isEmpty ? null : communityArea,
+              targetGroup: communityTargetGroup,
+              offset: append ? _communityNextOffset : 0)
+          : await (api as CommunityApi).searchCommunityActivities(
+              topic: communityTopic.isEmpty ? null : communityTopic,
+              area: communityArea.isEmpty ? null : communityArea);
+      if (!current()) return;
+      // A source fault during pagination preserves the current page and retry offset.
+      if (!(append && result.searchState == 'unavailable')) {
+        final seen = append
+            ? communityActivities.map((item) => item.id).toSet()
+            : <String>{};
+        communityActivities = [
+          if (append) ...communityActivities,
+          ...result.items.where((item) => seen.add(item.id))
+        ];
+        communityTotalCount = result.totalCount;
+        _communityNextOffset = result.offset + result.items.length;
+        communityHasMore = api is PagedCommunityApi &&
+            result.hasMore &&
+            result.items.isNotEmpty;
       }
-      communityActivities = result.items;
       communitySources = result.sources;
       communitySearchState = result.searchState;
       communityCheckedAt = result.checkedAt;
-      communityNoResults = result.noResults || result.items.isEmpty;
+      communityNoResults = communityActivities.isEmpty &&
+          (result.noResults || result.items.isEmpty);
       communitySearchMessage = result.message;
+      communitySearchReason = result.searchReason;
       errorMessage = null;
     } on ApiException catch (error) {
-      if (generation != _sessionGeneration ||
-          user?.id != ownerId ||
-          requestId != _communityGeneration) {
-        return;
+      if (!current()) return;
+      if (!append) {
+        communityActivities = const [];
+        communitySources = const [];
+        communitySearchState = 'unavailable';
+        communityCheckedAt = null;
       }
-      communityActivities = const [];
-      communitySources = const [];
-      communitySearchState = 'unavailable';
       communityNoResults = false;
       communitySearchMessage = error.message;
+      communitySearchReason = error.statusCode == 400 || error.statusCode == 422
+          ? 'invalid_query'
+          : (error.statusCode ?? 0) >= 500
+              ? 'service_error'
+              : 'request_failed';
     } finally {
-      if (generation == _sessionGeneration &&
-          user?.id == ownerId &&
-          requestId == _communityGeneration) {
+      if (current()) {
         communitySearchLoading = false;
         notifyListeners();
       }
