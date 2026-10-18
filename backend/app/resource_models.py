@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import JSON, Date, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,6 +71,7 @@ class ResourceItem(BaseModel):
 
     id: str
     title: str
+    organisation: str | None = Field(default=None, validation_alias=AliasChoices('organisation', 'source_authority'))
     excerpt: str
     url: str
     verified_at: date

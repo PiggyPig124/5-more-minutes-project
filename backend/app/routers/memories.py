@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import RLock
+from time import monotonic
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..db import get_db
 from ..dependencies import require_elder
-from ..memory_models import PersonalMemory, MemoryDeletionReceipt
+from ..memory_models import PersonalMemory, MemoryDeletionReceipt, new_memory_id
 from ..memory_consent import memory_consent_enabled
 from ..memory_models import MemoryConsent
 from ..memory_service import (
@@ -138,6 +141,74 @@ class MemoryOut(BaseModel):
     updated_at: datetime
 
 
+@dataclass(frozen=True)
+class _PendingMemory:
+    owner_id: str
+    value: MemoryOut
+    topic_key: str | None
+    expires_at: float
+
+
+_draft_lock = RLock()
+_DRAFT_TTL_SECONDS = 30 * 60
+
+
+def _drafts(request: Request) -> dict[str, _PendingMemory]:
+    """Caller holds _draft_lock; expired bodies are purged on draft access.
+
+    Drafts belong to this app process, never the database or an external cache.
+    A restart/another worker cannot restore them; the client must review again.
+    """
+    store = getattr(request.app.state, "pending_memories", None)
+    if store is None:
+        store = request.app.state.pending_memories = {}
+    now = monotonic()
+    for key in [key for key, draft in store.items() if draft.expires_at <= now]:
+        del store[key]
+    return store
+
+
+def _pending(request: Request, db: Session, owner_id: str, memory_id: str) -> _PendingMemory | None:
+    with _draft_lock:
+        store = _drafts(request)
+        draft = store.get(memory_id)
+        if draft is None:
+            return None
+        if draft.owner_id != owner_id:
+            raise HTTPException(404, "Memory not found")
+        if draft.value.revision != memory_revision(db, owner_id):
+            del store[memory_id]
+            raise HTTPException(409, "Memory changed; review a new draft before saving.")
+        return draft
+
+
+def _forget_drafts(request: Request, owner_id: str, ids: set[str] | None = None) -> None:
+    with _draft_lock:
+        store = _drafts(request)
+        for key in [key for key, value in store.items()
+                    if value.owner_id == owner_id and (ids is None or key in ids)]:
+            del store[key]
+
+
+def _stage_draft(request: Request, db: Session, owner_id: str, payload: MemoryCreate,
+                 *, suppressed: bool = False, replace_id: str | None = None) -> MemoryOut:
+    now = datetime.now(timezone.utc)
+    value = MemoryOut(id=new_memory_id(), revision=memory_revision(db, owner_id),
+        content=payload.content, kind=payload.kind, status="candidate", suppressed=suppressed,
+        event_time=payload.event_time, source_message_id=payload.source_message_id,
+        capture_method="manual" if payload.source_message_id else "owner_added",
+        created_at=now, updated_at=now)
+    with _draft_lock:
+        store = _drafts(request)
+        count = sum(item.owner_id == owner_id for item in store.values())
+        if replace_id is None and (len(store) >= 2048 or count >= 64):
+            raise HTTPException(429, "Too many pending memories; save or discard a draft first.")
+        store[value.id] = _PendingMemory(owner_id, value, payload.topic_key, monotonic() + _DRAFT_TTL_SECONDS)
+        if replace_id is not None:
+            store.pop(replace_id, None)
+    return value
+
+
 class MemorySearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -188,12 +259,16 @@ def _owner_memory(db: Session, owner_id: str, memory_id: str) -> PersonalMemory:
     return memory
 
 
-def _lock_memory_for_write(db: Session, owner_id: str, memory_id: str) -> PersonalMemory:
+def _lock_memory_for_write(db: Session, owner_id: str, memory_id: str,
+                           *, owner_locked: bool = False) -> PersonalMemory:
     """Serialize memory mutation with retrieval withdrawal and deletion."""
 
     # Lock the owner before the memory row.  Conversation writes use the same
     # order when revalidating memory sources.
-    lock_owner_account(db, owner_id)
+    # Reacquiring rolls back the current transaction. Preserve an owner guard
+    # already validated by a route instead of opening a stale-revision window.
+    if not owner_locked:
+        lock_owner_account(db, owner_id)
     if db.bind is not None and db.bind.dialect.name == "sqlite":
         # lock_owner_account reserved SQLite's single writer.
         memory = db.get(PersonalMemory, memory_id)
@@ -236,6 +311,7 @@ def get_memory_consent(
 @router.put("/consent", response_model=MemoryConsentOut)
 def set_memory_consent(
     payload: MemoryConsentRequest,
+    request: Request,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
     expected_revision: int | None = Header(default=None, alias="X-Memory-Revision", ge=0),
@@ -252,6 +328,8 @@ def set_memory_consent(
     bump_memory_revision(db, account.id)
     output = MemoryConsentOut(enabled=consent.enabled, revision=memory_revision(db, account.id), counts=_control_counts(db, account.id))
     db.commit()
+    if not payload.enabled:
+        _forget_drafts(request, account.id)
     return output
 
 
@@ -274,11 +352,11 @@ def control_state(account: Account = Depends(require_elder), db: Session = Depen
     return {"enabled": memory_consent_enabled(db, account.id), "revision": memory_revision(db, account.id), "counts": _control_counts(db, account.id)}
 
 
-def _delete_memories(db, owner_id, payload):
+def _delete_memories(db, owner_id, payload, request: Request):
     import hashlib, json
     lock_owner_account(db, owner_id)
-    request = {"mode": payload.mode, "memory_ids": sorted(payload.memory_ids), "expected_revision": payload.expected_revision}
-    request_hash = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    request_body = {"mode": payload.mode, "memory_ids": sorted(payload.memory_ids), "expected_revision": payload.expected_revision}
+    request_hash = hashlib.sha256(json.dumps(request_body, sort_keys=True).encode()).hexdigest()
     key_hash = hashlib.sha256(payload.idempotency_key.encode()).hexdigest()
     previous = db.scalar(select(MemoryDeletionReceipt).where(MemoryDeletionReceipt.owner_id == owner_id,
         MemoryDeletionReceipt.key_hash == key_hash))
@@ -287,35 +365,43 @@ def _delete_memories(db, owner_id, payload):
             raise HTTPException(409, "Deletion key belongs to a different request.")
         return {"request_id": previous.id, "revision": previous.revision, "counts": previous.counts}
     require_memory_revision(db, owner_id, payload.expected_revision)
+    draft_ids = set()
     if payload.mode == "all":
         if payload.memory_ids:
             raise HTTPException(422, "Delete all must not include selected IDs.")
         ids = set(db.scalars(select(PersonalMemory.id).where(PersonalMemory.owner_id == owner_id)).all())
+        with _draft_lock:
+            draft_ids = {key for key, item in _drafts(request).items() if item.owner_id == owner_id}
     else:
         if not payload.memory_ids or len(set(payload.memory_ids)) != len(payload.memory_ids):
             raise HTTPException(422, "Selected current memory IDs must be nonempty and unique.")
         ids = set()
         for memory_id in payload.memory_ids:
+            if _pending(request, db, owner_id, memory_id) is not None:
+                draft_ids.add(memory_id)
+                continue
             memory = _owner_memory(db, owner_id, memory_id)
             ids.update(_memory_chain_ids(db, memory.id))
-    result = purge_memory_set(db, owner_id, ids)
-    counts = {"memories": len(result["memory_ids"]), "stories": len(result["story_ids"])}
+    result = (purge_memory_set(db, owner_id, ids) if ids else
+              {"memory_ids": [], "story_ids": [], "revision": bump_memory_revision(db, owner_id)})
+    counts = {"memories": len(result["memory_ids"]) + len(draft_ids), "stories": len(result["story_ids"])}
     receipt = MemoryDeletionReceipt(owner_id=owner_id, key_hash=key_hash, request_hash=request_hash,
         revision=result["revision"], counts=counts)
     db.add(receipt)
     db.flush()
     out = {"request_id": receipt.id, "revision": receipt.revision, "counts": counts}
     db.commit()
+    _forget_drafts(request, owner_id, None if payload.mode == "all" else draft_ids)
     return out
 
 
 @router.post("/deletions")
-def delete_memories(payload: MemoryDeletionRequest, account: Account = Depends(require_elder), db: Session = Depends(get_db)):
-    return _delete_memories(db, account.id, payload)
+def delete_memories(payload: MemoryDeletionRequest, request: Request, account: Account = Depends(require_elder), db: Session = Depends(get_db)):
+    return _delete_memories(db, account.id, payload, request)
 
 
 @router.get("", response_model=list[MemoryOut])
-def list_memories(account: Account = Depends(require_elder), db: Session = Depends(get_db)) -> list[MemoryOut]:
+def list_memories(request: Request, account: Account = Depends(require_elder), db: Session = Depends(get_db)) -> list[MemoryOut]:
     lock_owner_account(db, account.id)
     rows = db.scalars(
         select(PersonalMemory)
@@ -326,12 +412,22 @@ def list_memories(account: Account = Depends(require_elder), db: Session = Depen
         )
         .order_by(PersonalMemory.updated_at.desc())
     ).all()
-    return [_out(memory, db) for memory in rows]
+    revision = memory_revision(db, account.id)
+    with _draft_lock:
+        store = _drafts(request)
+        stale = [key for key, item in store.items()
+                 if item.owner_id == account.id and item.value.revision != revision]
+        for key in stale:
+            del store[key]
+        pending = [item.value for item in store.values() if item.owner_id == account.id]
+    return sorted([*[_out(memory, db) for memory in rows], *pending],
+                  key=lambda item: item.updated_at.replace(tzinfo=timezone.utc), reverse=True)
 
 
 @router.post("", response_model=MemoryOut, status_code=status.HTTP_201_CREATED)
 async def create_memory(
     payload: MemoryCreate,
+    request: Request,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
     expected_revision: int | None = Header(default=None, alias="X-Memory-Revision", ge=0),
@@ -341,23 +437,9 @@ async def create_memory(
     require_memory_revision(db, account.id, expected_revision)
     _require_memory_enabled(db, account.id)
     _validate_source_message(db, account.id, payload.source_message_id)
-    memory = PersonalMemory(
-        owner_id=account.id,
-        content=payload.content,
-        kind=payload.kind,
-        event_time=payload.event_time,
-        status="candidate",
-        suppressed=False,
-        source_message_id=payload.source_message_id,
-        topic_key=payload.topic_key,
-    )
-    db.add(memory)
-    db.flush()
-    _mark_source_capture(db, payload.source_message_id, "manual")
-    await index_memory_with_adapter(db, memory)
-    bump_memory_revision(db, account.id)
-    output = _out(memory, db)
-    db.commit()
+    output = _stage_draft(request, db, account.id, payload)
+    # Release the SQL owner guard without committing candidate text or metadata.
+    db.rollback()
     return output
 
 
@@ -431,10 +513,14 @@ async def search_memories(
 @router.get("/{memory_id}", response_model=MemoryOut)
 def get_memory(
     memory_id: str,
+    request: Request,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
 ) -> MemoryOut:
     lock_owner_account(db, account.id)
+    draft = _pending(request, db, account.id, memory_id)
+    if draft is not None:
+        return draft.value
     return _out(_owner_memory(db, account.id, memory_id), db)
 
 
@@ -442,18 +528,35 @@ def get_memory(
 async def patch_memory(
     memory_id: str,
     payload: MemoryPatch,
+    request: Request,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
     expected_revision: int | None = Header(default=None, alias="X-Memory-Revision", ge=0),
 ) -> MemoryOut:
-    memory = await run_in_threadpool(_lock_memory_for_write, db, account.id, memory_id)
+    await run_in_threadpool(lock_owner_account, db, account.id)
     require_memory_revision(db, account.id, expected_revision)
     changes = payload.model_dump(exclude_unset=True)
+    draft = _pending(request, db, account.id, memory_id)
+    if draft is not None:
+        _require_memory_enabled(db, account.id)
+        if not changes:
+            return draft.value
+        value = draft.value
+        edited = MemoryCreate(content=changes.get("content", value.content),
+            kind=changes.get("kind", value.kind), event_time=changes.get("event_time", value.event_time),
+            source_message_id=value.source_message_id, topic_key=draft.topic_key)
+        output = _stage_draft(request, db, account.id, edited,
+            suppressed=changes.get("suppressed", value.suppressed), replace_id=memory_id)
+        db.rollback()
+        return output
+    memory = await run_in_threadpool(_lock_memory_for_write, db, account.id, memory_id, owner_locked=True)
     if not changes:
         return _out(memory, db)
 
     replacement_needed = "content" in changes or "kind" in changes or "event_time" in changes
     if replacement_needed:
+        if memory.status != "confirmed":
+            _require_memory_enabled(db, account.id)
         replacement = supersede_memory(
             db,
             memory,
@@ -462,6 +565,11 @@ async def patch_memory(
             suppressed=bool(changes["suppressed"]) if "suppressed" in changes else bool(memory.suppressed),
             event_time=changes.get("event_time", memory.event_time),
         )
+        # PATCH is the existing owner's explicit "Save changes" action.
+        # Persist its final replacement, never another unconfirmed candidate.
+        replacement.status = "confirmed"
+        if replacement.kind == "preference":
+            _clear_preference_topic_block(db, account.id, replacement.content, replacement.topic_key)
         await index_memory_with_adapter(db, replacement)
         output = _out(replacement, db)
         db.commit()
@@ -492,13 +600,29 @@ async def patch_memory(
 @router.post("/{memory_id}/confirm", response_model=MemoryOut)
 async def confirm_memory(
     memory_id: str,
+    request: Request,
     account: Account = Depends(require_elder),
     db: Session = Depends(get_db),
     expected_revision: int | None = Header(default=None, alias="X-Memory-Revision", ge=0),
 ) -> MemoryOut:
-    memory = await run_in_threadpool(_lock_memory_for_write, db, account.id, memory_id)
+    await run_in_threadpool(lock_owner_account, db, account.id)
     require_memory_revision(db, account.id, expected_revision)
     _require_memory_enabled(db, account.id)
+    draft = _pending(request, db, account.id, memory_id)
+    if draft is not None:
+        value = draft.value
+        _validate_source_message(db, account.id, value.source_message_id)
+        memory = PersonalMemory(id=value.id, owner_id=account.id, content=value.content,
+            kind=value.kind, event_time=value.event_time, status="confirmed", suppressed=value.suppressed,
+            source_message_id=value.source_message_id, topic_key=draft.topic_key,
+            created_at=value.created_at, updated_at=datetime.now(timezone.utc))
+        db.add(memory)
+        db.flush()
+        _mark_source_capture(db, value.source_message_id, "manual")
+    else:
+        memory = await run_in_threadpool(_lock_memory_for_write, db, account.id, memory_id, owner_locked=True)
+        if memory.status == "confirmed":
+            return _out(memory, db)
     memory.status = "confirmed"
     memory.updated_at = datetime.now(timezone.utc)
     if memory.kind == "preference":
@@ -508,17 +632,20 @@ async def confirm_memory(
     else:
         await index_memory_with_adapter(db, memory)
     bump_memory_revision(db, account.id)
+    db.flush()
+    db.refresh(memory)
     output = _out(memory, db)
     db.commit()
+    _forget_drafts(request, account.id, {memory_id})
     return output
 
 
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_memory(memory_id: str, account: Account = Depends(require_elder), db: Session = Depends(get_db),
+def delete_memory(memory_id: str, request: Request, account: Account = Depends(require_elder), db: Session = Depends(get_db),
     expected_revision: int | None = Header(default=None, alias="X-Memory-Revision", ge=0),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=1, max_length=200)) -> Response:
     if expected_revision is None or idempotency_key is None:
         raise HTTPException(422, "Deletion requires X-Memory-Revision and Idempotency-Key.")
     result = _delete_memories(db, account.id, MemoryDeletionRequest(mode="selected", memory_ids=[memory_id],
-        expected_revision=expected_revision, idempotency_key=idempotency_key))
+        expected_revision=expected_revision, idempotency_key=idempotency_key), request)
     return Response(status_code=204, headers={"X-Memory-Revision": str(result["revision"])})

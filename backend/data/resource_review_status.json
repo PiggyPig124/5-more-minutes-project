@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "records": {
+    "transport-rehabus-2026": {
+      "status": "unverified",
+      "reason": "The original URL/authority association and service claims require independent review. This hold excludes recommendation and new card provenance eligibility; no network verification or replacement source is asserted. The original claimed review date is evidence only, not approval.",
+      "original_evidence": {
+        "url": "https://www.hkab.org.hk/zh-hk/rehabus",
+        "claimed_reviewed_at": "2026-09-20",
+        "content_hash": "bcbd07d6ea8386e08ecd4cf209dc837d6d348c43266033c350449c9904f64f62"
+      }
+    }
+  }
+}

@@ -275,13 +275,13 @@ void main() {
       await c.searchCommunity();
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
-          find.text(english ? 'Volunteer opportunity search is not enabled yet.'
-              : '義工機會搜尋尚未接入資料來源。'), 180,
+          find.text(english ? 'Volunteer opportunity sources are not enabled or are unavailable; no match can be confirmed.'
+              : '義工機會來源尚未啟用或暫時不可用；目前沒有可確認的配對。'), 180,
           scrollable: find.byType(Scrollable).first);
       expect(
           find.text(english
-              ? 'Volunteer opportunity search is not enabled yet.'
-              : '義工機會搜尋尚未接入資料來源。'),
+              ? 'Volunteer opportunity sources are not enabled or are unavailable; no match can be confirmed.'
+              : '義工機會來源尚未啟用或暫時不可用；目前沒有可確認的配對。'),
           findsOneWidget);
       final scrollable = find.byType(Scrollable).first;
       await tester.scrollUntilVisible(

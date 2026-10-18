@@ -115,7 +115,7 @@ def _source(db: Session, owner_id: str, message_id: str) -> Message:
     # An explicitly supplied marker must be typed and positively complete.
     if (metadata.get('status') not in (None, 'completed', 'complete', 'ready')
             or ('mode' in metadata and metadata['mode'] not in
-                ('deterministic_demo', 'openai_compatible', 'safety_intervention'))
+                ('deterministic_demo', 'openai_compatible', 'safety_intervention', 'official_guidance'))
             or ('pending' in metadata and metadata['pending'] is not False)
             or ('completed' in metadata and metadata['completed'] is not True)):
         raise HTTPException(409, 'Answer source is not complete')

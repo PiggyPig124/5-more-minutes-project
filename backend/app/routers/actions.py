@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -9,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..task_due_at import parse_due_at as _parse_due_at
 from ..memory_service import lock_owner_account
 from ..dependencies import get_current_account
 from ..models import Account, ActionProposal, Task
@@ -48,18 +48,6 @@ def _task_out(task: Task | None) -> TaskOut | None:
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
-
-
-def _parse_due_at(value: object) -> datetime | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Hong_Kong"))
-        return parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError):
-        return None
 
 
 def _get_owned_action(db: Session, action_id: str, account: Account) -> ActionProposal:
@@ -111,9 +99,20 @@ def confirm_action(
     if action.status == "executed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Action has already been executed")
 
+    data = dict(action.payload or {})
+    due_at = _parse_due_at(data.get('due_at'))
+    scheduled = (data.get('due_at') is not None or
+        action.action_type in {'reminder', 'appointment'} or
+        data.get('type') in {'reminder', 'appointment'})
+    if scheduled:
+        if (due_at is None or due_at <= datetime.now(timezone.utc)):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail='Please provide an unambiguous future date, time and UTC offset before confirming the reminder.')
+        if not isinstance(data.get('title'), str) or not data['title'].strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail='Please provide the event before confirming the reminder.')
     if idempotency_key:
         action.confirmation_key = idempotency_key
-    data = dict(action.payload or {})
     task = Task(
         owner_id=action.owner_id,
         created_by=account.id,
@@ -121,7 +120,7 @@ def confirm_action(
         task_type=str(data.get("type") or action.action_type or "care_task"),
         title=str(data.get("title") or "Follow up on this request")[:240],
         description=str(data.get("description") or "")[:5000],
-        due_at=_parse_due_at(data.get("due_at")),
+        due_at=due_at,
         status="pending",
     )
     try:

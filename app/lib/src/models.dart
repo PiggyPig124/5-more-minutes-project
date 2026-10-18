@@ -1,5 +1,6 @@
 export 'family_connection_models.dart';
 import 'dart:convert';
+import 'guest_answer_sources.dart';
 
 enum UserRole {
   elder,
@@ -442,6 +443,57 @@ enum ActionKind {
   }
 }
 
+/// An explicit offset is required: a zone-less wall time is not consent.
+class ActionReminderDetails {
+  const ActionReminderDetails(this.instant, this.date, this.time, this.zone);
+  final DateTime instant;
+  final String date;
+  final String time;
+  final String zone;
+
+  static ActionReminderDetails? parse(String? raw) {
+    if (raw == null) return null;
+    final match = RegExp(
+            r'^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})(?::([0-9]{2})(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}:[0-9]{2})$')
+        .firstMatch(raw);
+    if (match == null) return null;
+    final year = int.parse(match[1]!);
+    final month = int.parse(match[2]!);
+    final day = int.parse(match[3]!);
+    final hour = int.parse(match[4]!);
+    final minute = int.parse(match[5]!);
+    final second = int.parse(match[6] ?? '0');
+    final offset = match[8]!;
+    final calendar = DateTime.utc(year, month, day);
+    if (year < 1 ||
+        calendar.year != year ||
+        calendar.month != month ||
+        calendar.day != day ||
+        hour > 23 ||
+        minute > 59 ||
+        second > 59 ||
+        offset == '-00:00') {
+      return null;
+    }
+    if (offset != 'Z') {
+      final offsetHour = int.parse(offset.substring(1, 3));
+      final offsetMinute = int.parse(offset.substring(4, 6));
+      if (offsetHour > 14 ||
+          offsetMinute > 59 ||
+          (offsetHour == 14 && offsetMinute != 0)) {
+        return null;
+      }
+    }
+    final instant = DateTime.tryParse(raw);
+    if (instant == null) return null;
+    return ActionReminderDetails(
+        instant.toUtc(),
+        raw.substring(0, 10),
+        '${match[4]}:${match[5]}:${match[6] ?? '00'}${match[7] ?? ''}',
+        offset == 'Z' ? 'UTC+00:00' : 'UTC$offset');
+  }
+}
+
 class ActionProposal {
   const ActionProposal({
     required this.id,
@@ -450,6 +502,7 @@ class ActionProposal {
     required this.description,
     this.conversationId,
     this.recipientLabel,
+    this.dueAtText,
     this.confirmed = false,
     this.dismissed = false,
   });
@@ -460,8 +513,17 @@ class ActionProposal {
   final String description;
   final String? conversationId;
   final String? recipientLabel;
+  final String? dueAtText;
   final bool confirmed;
   final bool dismissed;
+
+  ActionReminderDetails? get reminderDetails =>
+      ActionReminderDetails.parse(dueAtText);
+
+  bool canConfirmAt(DateTime now) =>
+      kind != ActionKind.task ||
+      (title.trim().isNotEmpty &&
+          (reminderDetails?.instant.isAfter(now.toUtc()) ?? false));
 
   factory ActionProposal.fromJson(Map<String, dynamic> json) {
     final recipient = _map(json['recipient']);
@@ -472,13 +534,20 @@ class ActionProposal {
       ...?payload,
       ...json,
     };
+    // Match the immutable payload executed by the server, not outer preview text.
+    final execution = payload ?? json;
+    final declaredKind = ActionKind.fromJson(json['action_type']);
     return ActionProposal(
       id: _string(source, const ['id', 'action_id']) ?? '',
-      kind: ActionKind.fromJson(
-          source['kind'] ?? source['type'] ?? source['action_type']),
-      title: _string(source, const ['title', 'name']) ?? '需要你確認的事項',
+      kind: declaredKind == ActionKind.task ? ActionKind.task : ActionKind.fromJson(
+          execution['type'] ?? source['kind'] ?? source['action_type']),
+      title: payload != null
+          ? (execution['title'] is String ? execution['title'] as String : '')
+          : _string(execution, const ['title', 'name']) ?? '',
       description:
-          _string(source, const ['description', 'preview', 'content']) ?? '',
+          _string(execution, const ['description', 'preview', 'content']) ?? '',
+      dueAtText:
+          execution['due_at'] is String ? execution['due_at'] as String : null,
       conversationId:
           _string(source, const ['conversation_id', 'conversationId']),
       recipientLabel: _string(source, const [
@@ -770,11 +839,13 @@ class GuestReply {
       required this.mode,
       this.expiresAt,
       this.communitySources = const [],
+      this.answerCardSources = const [],
       this.communitySearchState});
   final String content;
   final String mode;
   final DateTime? expiresAt;
   final List<CommunitySearchSource> communitySources;
+  final List<AnswerCardSource> answerCardSources;
   final String? communitySearchState;
   factory GuestReply.fromJson(Map<String, dynamic> json) => GuestReply(
         content: _string(json, const ['reply', 'content']) ?? '',
@@ -784,6 +855,7 @@ class GuestReply {
             .map(CommunitySearchSource.fromJson)
             .toList(),
         communitySearchState: _string(json, const ['community_search_state']),
+        answerCardSources: parseGuestAnswerSources(json),
       );
 }
 
@@ -1013,6 +1085,7 @@ class ResourceItem {
     required this.id,
     required this.title,
     required this.excerpt,
+    this.organisation,
     this.url,
     this.verifiedAt,
     this.effectiveDate,
@@ -1024,6 +1097,7 @@ class ResourceItem {
   final String id;
   final String title;
   final String excerpt;
+  final String? organisation;
   final String? url;
   final DateTime? verifiedAt;
   final DateTime? effectiveDate;
@@ -1036,6 +1110,7 @@ class ResourceItem {
       id: _string(json, const ['id', 'resource_id']) ?? '',
       title: _string(json, const ['title', 'name']) ?? '資料',
       excerpt: _string(json, const ['excerpt', 'summary', 'content']) ?? '',
+      organisation: _string(json, const ['organisation']),
       url: _string(json, const ['url', 'link']),
       verifiedAt: _date(json, const ['verified_at', 'verifiedAt']),
       effectiveDate: _date(json, const ['effective_date', 'effectiveDate']),
@@ -1337,28 +1412,98 @@ class ScamResource {
   }
 }
 
-/// A verified anti-scam contact (police, consumer council, etc.).
+/// A public contact with explicit, expiring approval provenance.
 class ScamContact {
   const ScamContact({
-    required this.name,
-    required this.phone,
-    this.url,
-    this.description,
+    required this.name, required this.phone, this.url, this.description,
+    this.id = '', this.sourceId = '', this.sourceContentHash = '',
+    this.recordVersion = '', this.sourceUrl, this.verifiedAt, this.expiresAt,
+    this.sourceVerifiedAt, this.status = 'unavailable', this.callable = false,
   });
 
   final String name;
   final String phone;
   final String? url;
   final String? description;
+  final String id;
+  final String sourceId;
+  final String sourceContentHash;
+  final String recordVersion;
+  final String? sourceUrl;
+  final DateTime? verifiedAt;
+  final DateTime? expiresAt;
+  final String? sourceVerifiedAt;
+  final String status;
+  final bool callable;
 
-  factory ScamContact.fromJson(Map<String, dynamic> json) {
-    return ScamContact(
-      name: _string(json, const ['name', 'name_en']) ?? '',
-      phone: _string(json, const ['phone', 'tel']) ?? '',
-      url: _string(json, const ['url', 'link']),
-      description: _string(json, const ['description', 'description_en']),
-    );
+  static const _sourceHosts = {
+    'scam-phone-fraud': 'www.police.gov.hk',
+    'scam-online-shopping': 'www.consumer.org.hk',
+    'scam-investment': 'www.hkma.gov.hk',
+  };
+
+  static Uri? officialSourceUri(String? value) {
+    final uri = value == null ? null : Uri.tryParse(value);
+    if (uri == null || uri.scheme != 'https' ||
+        !_sourceHosts.values.contains(uri.host) || uri.userInfo.isNotEmpty ||
+        uri.hasPort || uri.hasQuery || uri.hasFragment || value!.contains('\\') ||
+        RegExp(r'\s').hasMatch(value)) {
+      return null;
+    }
+    return uri;
   }
+
+  Uri? get officialUri => officialSourceUri(url);
+  bool get canCall => canCallAt(DateTime.now().toUtc());
+  bool canCallAt(DateTime now) {
+    final source = officialSourceUri(sourceUrl);
+    final evidence = officialUri;
+    final verified = verifiedAt;
+    final expiry = expiresAt;
+    final sourceDate = sourceVerifiedAt == null ? null : DateTime.tryParse(sourceVerifiedAt!);
+    return callable && status == 'approved' && id.isNotEmpty &&
+        RegExp(r'^[a-f0-9]{64}$').hasMatch(sourceContentHash) &&
+        RegExp(r'^[a-f0-9]{64}$').hasMatch(recordVersion) &&
+        RegExp(r'^(?:[0-9]{5}|[0-9]{8})$').hasMatch(phone.replaceAll(' ', '')) &&
+        source != null && evidence != null && source.host == _sourceHosts[sourceId] &&
+        source.host == evidence.host && verified != null && expiry != null &&
+        sourceDate != null && sourceDate.toIso8601String().substring(0, 10) == sourceVerifiedAt &&
+        sourceVerifiedAt!.compareTo(verified.toUtc().toIso8601String().substring(0, 10)) <= 0 &&
+        !verified.isAfter(now) && expiry.isAfter(now) && expiry.isAfter(verified) &&
+        expiry.difference(verified) <= const Duration(days: 90);
+  }
+
+  Uri? get dialUri => canCall ? Uri(scheme: 'tel', path: phone.replaceAll(' ', '')) : null;
+
+  static DateTime? _approvalInstant(Object? value) {
+    if (value is! String) return null;
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$').firstMatch(value);
+    if (match == null) return null;
+    final parts = [for (var i = 1; i <= 6; i++) int.parse(match.group(i)!)];
+    final day = DateTime.utc(parts[0], parts[1], parts[2]);
+    if (day.year != parts[0] || day.month != parts[1] || day.day != parts[2] ||
+        parts[3] > 23 || parts[4] > 59 || parts[5] > 59) {
+      return null;
+    }
+    final offset = RegExp(r'[+-](\d{2}):(\d{2})$').firstMatch(value);
+    if (offset != null && (int.parse(offset.group(1)!) > 23 || int.parse(offset.group(2)!) > 59)) {
+      return null;
+    }
+    return DateTime.tryParse(value)?.toUtc();
+  }
+
+  factory ScamContact.fromJson(Map<String, dynamic> json) => ScamContact(
+    name: _string(json, const ['name', 'name_en']) ?? '',
+    phone: _string(json, const ['phone', 'tel']) ?? '',
+    url: _string(json, const ['url']), description: _string(json, const ['description', 'description_en']),
+    id: _string(json, const ['id']) ?? '', sourceId: _string(json, const ['source_id']) ?? '',
+    sourceContentHash: _string(json, const ['source_content_hash']) ?? '',
+    recordVersion: _string(json, const ['record_version']) ?? '',
+    sourceUrl: _string(json, const ['source_url']),
+    verifiedAt: _approvalInstant(json['verified_at']), expiresAt: _approvalInstant(json['expires_at']),
+    sourceVerifiedAt: _string(json, const ['source_verified_at']),
+    status: _string(json, const ['status']) ?? 'unavailable', callable: json['callable'] == true,
+  );
 }
 
 /// The standard three-step scam verification protocol action.

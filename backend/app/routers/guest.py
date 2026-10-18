@@ -16,6 +16,9 @@ from ..db import get_db
 from ..community_search import community_listing_type_from_query, explicit_community_query, topic_from_query
 from ..resource_models import ResourceSearchResponse
 from ..resource_service import search_resources
+from ..official_guidance import guidance_domain, navigation_resources
+from ..answer_card_service import sanitized_sources
+from ..llm import detect_urgent_risk
 
 router = APIRouter(prefix="/guest", tags=["guest"])
 GUEST_TTL = timedelta(minutes=30)
@@ -96,21 +99,19 @@ async def send_message(
         "memory_sources": [],
         "memory_retrieval_mode": "disabled",
     }
-    resource_query = bool(re.search(
-        r"福利|津貼|津贴|補助|补助|資助|资助|醫療費|医疗费|覆診費|覆诊费|"
-        r"照顧者支援|照顾者支援|社區照顧|社区照顾|長者中心|长者中心|"
-        r"\bwelfare\b|\bsubsid(?:y|ies)\b|\bfee waiver\b|\bcaregiver support\b",
-        payload.content,
-        re.IGNORECASE,
-    ))
+    domain = guidance_domain(payload.content)
+    urgent_risk = detect_urgent_risk(payload.content)
+    resource_query = domain is not None
     resource_result = {"items": [], "retrieval_mode": "not_requested", "conflicts": []}
-    if resource_query:
-        resource_result = await search_resources(db, payload.content[:500])
+    if resource_query and not urgent_risk:
+        resource_result = (navigation_resources(domain) if domain in ('transport', 'healthcare')
+                           else await search_resources(db, payload.content[:500]))
     context["resource_query"] = resource_query
+    context["guidance_domain"] = domain
     context["resource_sources"] = resource_result["items"]
     context["resource_conflicts"] = resource_result["conflicts"]
     community_result = None
-    if explicit_community_query(payload.content):
+    if not urgent_risk and explicit_community_query(payload.content):
         community_result = await run_in_threadpool(
             request.app.state.community_search.search,
             listing_type=community_listing_type_from_query(payload.content),
@@ -148,6 +149,15 @@ async def send_message(
         "mode": reply.mode,
         "expires_at": session["expires_at"],
     }
+    # Only trusted server manifest bindings supply RAM card sources. Never
+    # infer sources from model prose, arbitrary URLs or personal-memory data.
+    try:
+        public_sources = sanitized_sources({
+            'resource_source_bindings': resource_result.get('source_bindings', []),
+        })
+    except (ValueError, OSError):
+        public_sources = []  # Chat remains usable; the card honestly has no source.
+    response.update(answer_card_sources_version=1, answer_card_sources=public_sources)
     if community_result is not None:
         response.update({
             "community_sources": jsonable_encoder(community_result["sources"]),

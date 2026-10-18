@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
 import 'models.dart';
+import 'help_search_state.dart';
 import 'reminders.dart';
 import 'storage.dart';
 
@@ -400,8 +401,12 @@ class AppController extends ChangeNotifier {
   List<StoryRecord> stories = const [];
   List<ResourceItem> resourceItems = const [];
   List<ResourceConflict> resourceConflicts = const [];
-  List<ResourceItem> guestHelpResources = const [];
-  String? guestHelpRetrievalMode;
+  final HelpSearchState helpSearch = HelpSearchState();
+  bool _helpSearchDisposed = false;
+  List<ResourceItem> get guestHelpResources => helpSearch.items;
+  String? get guestHelpRetrievalMode => helpSearch.retrievalMode;
+  Object get helpSearchIdentity =>
+      (_sessionGeneration, _guestGeneration, user?.id, guestSession?.id);
   String? resourceRetrievalMode;
   List<FamilyMessage> familyMessages = const [];
   bool memoryConsentEnabled = false;
@@ -681,6 +686,13 @@ class AppController extends ChangeNotifier {
   }
 
   GuestSession? guestSession;
+  bool guestStarting = false;
+  bool guestSending = false;
+  Timer? _guestExpiryTimer;
+  DateTime? _guestDeadline;
+  bool _guestDisposed = false;
+  Object? get guestSessionIdentity =>
+      guestSession == null ? null : (_guestGeneration, guestSession!.id);
   final List<(String, bool)> guestMessages = <(String, bool)>[];
   final Map<int, Map<String, dynamic>> guestMessageMetadata = {};
   final Set<String> savingMemorySuggestionIds = <String>{};
@@ -923,7 +935,8 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _setSession(AuthSession nextSession) async {
-    if (guestSession != null) await endGuestSession();
+    helpSearch.reset();
+    if (guestSession != null || guestStarting) await endGuestSession();
     _sessionGeneration += 1;
     _resetMemoryControls();
     _resetTaskSharing();
@@ -939,6 +952,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    helpSearch.reset();
     await endGuestSession();
     final currentUserId = user?.id;
     _sessionGeneration += 1;
@@ -996,7 +1010,7 @@ class AppController extends ChangeNotifier {
       communityCheckedAt = null;
       communitySearchMessage = '';
       communitySearchReason = 'not_searched';
-      guestHelpResources = const [];
+      helpSearch.reset();
       savingMemorySuggestionIds.clear();
       savedMemorySuggestionIds.clear();
       catalogActivities = const [];
@@ -1169,53 +1183,131 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  bool _guestCurrent(int generation, String id) =>
+      !_guestDisposed && session == null &&
+      generation == _guestGeneration && guestSession?.id == id;
+
+  void _clearGuestRam({String? message}) {
+    ++_guestGeneration;
+    _guestExpiryTimer?.cancel();
+    _guestExpiryTimer = null;
+    _guestDeadline = null;
+    guestStarting = false;
+    guestSending = false;
+    guestSession = null;
+    guestMessages.clear();
+    guestMessageMetadata.clear();
+    helpSearch.reset();
+    errorMessage = message;
+  }
+
+  void _scheduleGuestExpiry() {
+    _guestExpiryTimer?.cancel();
+    final active = guestSession;
+    if (active == null || _guestDisposed) return;
+    // The current server TTL is 30 minutes. Older/malformed responses without
+    // an absolute deadline must not leave guest text resident indefinitely.
+    final deadline = active.expiresAt ?? _guestDeadline ??
+        DateTime.now().add(const Duration(minutes: 30));
+    _guestDeadline = deadline;
+    final generation = _guestGeneration;
+    final remaining = deadline.difference(DateTime.now());
+    _guestExpiryTimer = Timer(remaining.isNegative ? Duration.zero : remaining, () {
+      if (!_guestCurrent(generation, active.id) || _guestDeadline != deadline) return;
+      _clearGuestRam(message: '訪客對話已到期，這台裝置上的對話已清除。 / Guest session expired; conversation cleared.');
+      notifyListeners();
+    });
+  }
+
+  // A suspended app may not run Dart timers. Check the absolute deadline on
+  // resume as well as before accepting a request or its reply.
+  bool expireGuestSessionIfNeeded() {
+    if (_guestDisposed || guestSession == null) return false;
+    final deadline = guestSession!.expiresAt ?? _guestDeadline;
+    if (deadline == null || deadline.isAfter(DateTime.now())) return false;
+    _clearGuestRam(message: '訪客對話已到期，這台裝置上的對話已清除。 / Guest session expired; conversation cleared.');
+    notifyListeners();
+    return true;
+  }
+
+  /// Session-scoped guest capabilities share the same server-expiry policy.
+  /// A response captured before End/replacement must never retire a new guest.
+  bool handleGuestSessionFailure(Object? expectedIdentity, Object error) {
+    if (_guestDisposed || session != null || expectedIdentity == null ||
+        expectedIdentity != guestSessionIdentity || error is! ApiException ||
+        (error.statusCode != 404 && error.statusCode != 410)) {
+      return false;
+    }
+    _clearGuestRam(message: '訪客對話已到期，這台裝置上的對話已清除。 / Guest session expired; conversation cleared.');
+    notifyListeners();
+    return true;
+  }
+
   Future<bool> startGuestSession() async {
+    if (_guestDisposed || session != null || guestStarting) return false;
+    final previous = guestSession;
+    _clearGuestRam();
     final guestApi = api is GuestApi ? api as GuestApi : null;
+    if (previous != null && guestApi != null) {
+      unawaited(guestApi.endGuestSession(previous.id).catchError((Object _) {}));
+    }
     if (guestApi == null) {
       errorMessage = '訪客對話服務尚未就緒。';
       notifyListeners();
       return false;
     }
-    loading = true;
-    errorMessage = null;
+    guestStarting = true;
     notifyListeners();
-    final generation = ++_guestGeneration;
+    final generation = _guestGeneration;
     try {
       final created = await guestApi.startGuestSession();
-      if (generation != _guestGeneration || session != null) {
-        await guestApi.endGuestSession(created.id);
+      if (_guestDisposed || generation != _guestGeneration || session != null) {
+        unawaited(guestApi.endGuestSession(created.id).catchError((Object _) {}));
         return false;
       }
       guestSession = created;
-      guestMessages.clear();
-      guestMessageMetadata.clear();
+      if (expireGuestSessionIfNeeded()) return false;
+      _scheduleGuestExpiry();
       return true;
-    } on ApiException catch (error) {
-      errorMessage = error.message;
+    } on Object catch (error) {
+      if (!_guestDisposed && generation == _guestGeneration && session == null) {
+        errorMessage = _messageFor(error);
+      }
       return false;
     } finally {
-      loading = false;
-      notifyListeners();
+      if (!_guestDisposed && generation == _guestGeneration && session == null) {
+        guestStarting = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<bool> sendGuestMessage(String content) async {
+    if (expireGuestSessionIfNeeded() || _guestDisposed || guestSending || session != null) return false;
     final active = guestSession;
     final guestApi = api is GuestApi ? api as GuestApi : null;
-    if (active == null || guestApi == null || content.trim().isEmpty) {
-      return false;
-    }
+    if (active == null || guestApi == null || content.trim().isEmpty) return false;
     final generation = _guestGeneration;
+    guestSending = true;
+    errorMessage = null;
     guestMessages.add((content.trim(), true));
     notifyListeners();
     try {
       final reply = await guestApi.sendGuestMessage(active.id, content.trim());
-      if (generation != _guestGeneration || guestSession?.id != active.id) {
-        return false;
+      if (!_guestCurrent(generation, active.id) || expireGuestSessionIfNeeded()) return false;
+      if (reply.expiresAt != null) {
+        guestSession = GuestSession(id: active.id, expiresAt: reply.expiresAt);
+        if (expireGuestSessionIfNeeded()) return false;
+        _scheduleGuestExpiry();
       }
       guestMessages.add((reply.content, false));
-      if (reply.communitySources.isNotEmpty) {
+      if (reply.communitySources.isNotEmpty || reply.answerCardSources.isNotEmpty) {
         guestMessageMetadata[guestMessages.length - 1] = {
+          if (reply.answerCardSources.isNotEmpty) ...{
+            'answer_card_sources_version': 1,
+            'answer_card_sources': reply.answerCardSources
+                .map((source) => source.toJson()).toList(),
+          },
           'community_sources': reply.communitySources
               .map((source) => {
                     'name': source.name,
@@ -1230,35 +1322,37 @@ class AppController extends ChangeNotifier {
             'community_search_state': reply.communitySearchState,
         };
       }
-      if (reply.expiresAt != null) {
-        guestSession = GuestSession(id: active.id, expiresAt: reply.expiresAt);
-      }
       errorMessage = null;
       return true;
-    } on ApiException catch (error) {
-      if (generation == _guestGeneration && guestSession?.id == active.id) {
-        errorMessage = error.message;
+    } on Object catch (error) {
+      if (_guestCurrent(generation, active.id)) {
+        if (!handleGuestSessionFailure((generation, active.id), error)) {
+          errorMessage = _messageFor(error);
+        }
       }
       return false;
     } finally {
-      notifyListeners();
+      if (_guestCurrent(generation, active.id)) {
+        guestSending = false;
+        notifyListeners();
+      }
     }
   }
 
   Future<void> endGuestSession() async {
+    if (_guestDisposed) return;
     final previous = guestSession;
-    ++_guestGeneration;
-    guestSession = null;
-    guestMessages.clear();
-    guestMessageMetadata.clear();
-    errorMessage = null;
+    _clearGuestRam();
+    final generation = _guestGeneration;
     notifyListeners();
     if (previous != null && api is GuestApi) {
       try {
         await (api as GuestApi).endGuestSession(previous.id);
-      } on ApiException catch (error) {
-        errorMessage = error.message;
-        notifyListeners();
+      } on Object catch (error) {
+        if (!_guestDisposed && generation == _guestGeneration && guestSession == null && session == null) {
+          errorMessage = _messageFor(error);
+          notifyListeners();
+        }
       }
     }
   }
@@ -1597,28 +1691,36 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> searchHelp(String query) async {
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return;
-    final generation = _sessionGeneration;
-    final ownerId = user?.id;
-    try {
-      final result = isSignedIn
-          ? await api.searchResources(query: trimmed, limit: 4)
-          : api is GuestResourceApi
-              ? await (api as GuestResourceApi)
-                  .searchGuestResources(query: trimmed, limit: 4)
-              : throw const ApiException('訪客資訊搜尋暫時未能使用。');
-      if (generation != _sessionGeneration || user?.id != ownerId) return;
-      guestHelpResources = result.items;
-      guestHelpRetrievalMode = result.retrievalMode;
-      errorMessage = null;
-    } on ApiException catch (error) {
-      if (generation != _sessionGeneration || user?.id != ownerId) return;
-      errorMessage = error.message;
-      guestHelpResources = const [];
-    }
-    notifyListeners();
+  Object openHelpSearchScope() => helpSearch.openScope();
+
+  // No notification during widget disposal/build; pending results are fenced.
+  void closeHelpSearchScope(Object scope) => helpSearch.closeScope(scope);
+
+  Future<void> searchHelp(String query, {Object? scope}) {
+    final identity = helpSearchIdentity;
+    return helpSearch.search(query,
+        scope: scope,
+        sessionCurrent: () => !_helpSearchDisposed && identity == helpSearchIdentity,
+        changed: notifyListeners,
+        load: (trimmed) => isSignedIn
+            ? api.searchResources(query: trimmed, limit: 4)
+            : api is GuestResourceApi
+                ? (api as GuestResourceApi).searchGuestResources(query: trimmed, limit: 4)
+                : throw const ApiException('訪客資訊搜尋暫時未能使用。'));
+  }
+
+  Future<void> retryHelpSearch({Object? scope}) async {
+    if (helpSearch.phase != HelpSearchPhase.error) return;
+    await searchHelp(helpSearch.submittedQuery, scope: scope);
+  }
+
+  @override
+  void dispose() {
+    _guestDisposed = true;
+    _clearGuestRam();
+    _helpSearchDisposed = true;
+    helpSearch.reset();
+    super.dispose();
   }
 
   Future<bool> decideSkill(SkillSuggestion suggestion,
@@ -2370,6 +2472,13 @@ class AppController extends ChangeNotifier {
 
   Future<bool> confirmAction(ActionProposal action) async {
     if (updatingActionIds.contains(action.id)) return false;
+    // Recheck at the click boundary: a valid preview can expire while open.
+    if (!action.canConfirmAt(DateTime.now())) {
+      errorMessage =
+          'Please provide an event and an unambiguous future date, time and UTC offset before confirming. / 請先補充事項、明確的未來日期、時間及 UTC 時差，再確認。';
+      notifyListeners();
+      return false;
+    }
     final clientActionId = _actionClientIds.putIfAbsent(
       action.id,
       () => _stableClientId('action', action.id),
@@ -3493,24 +3602,24 @@ class AppController extends ChangeNotifier {
   // --- Scam safety (FR SCM 01-04) ---
 
   Future<void> refreshScamResources({bool silent = false}) async {
-    if (api is! CatalogScamApi || session == null) return;
+    if (api is! CatalogScamApi) return;
     final generation = _sessionGeneration;
     if (!silent) {
       loading = true;
-      errorMessage = null;
-      notifyListeners();
     }
+    errorMessage = null;
+    notifyListeners();
     try {
       final loaded = await (api as CatalogScamApi).listScamResources();
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration) return;
       scamResources = loaded;
       notifyListeners();
     } on ApiException catch (error) {
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration) return;
       errorMessage = error.message;
       notifyListeners();
     } finally {
-      if (!silent) {
+      if (!silent && generation == _sessionGeneration) {
         loading = false;
         notifyListeners();
       }
@@ -3518,7 +3627,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<List<ScamResource>> searchScamResources(String query) async {
-    if (api is! CatalogScamApi || session == null || query.trim().isEmpty) {
+    if (api is! CatalogScamApi || query.trim().isEmpty) {
       return const [];
     }
     final generation = _sessionGeneration;
@@ -3527,10 +3636,10 @@ class AppController extends ChangeNotifier {
     try {
       final results =
           await (api as CatalogScamApi).searchScamResources(query.trim());
-      if (generation != _sessionGeneration || session == null) return const [];
+      if (generation != _sessionGeneration) return const [];
       return results;
     } on ApiException catch (error) {
-      if (generation != _sessionGeneration || session == null) return const [];
+      if (generation != _sessionGeneration) return const [];
       errorMessage = error.message;
       notifyListeners();
       return const [];
@@ -3538,33 +3647,58 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> refreshVerifyActions({bool silent = true}) async {
-    if (api is! CatalogScamApi || session == null) return;
+    if (api is! CatalogScamApi) return;
     final generation = _sessionGeneration;
     try {
       final loaded = await (api as CatalogScamApi).getVerifyActions();
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration) return;
       verifyActions = loaded;
       notifyListeners();
     } on ApiException catch (error) {
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration) return;
       if (!silent) errorMessage = error.message;
       notifyListeners();
     }
   }
 
+  int _scamContactsRequest = 0;
+
   Future<void> refreshScamContacts({bool silent = true}) async {
-    if (api is! CatalogScamApi || session == null) return;
+    if (api is! CatalogScamApi) return;
     final generation = _sessionGeneration;
+    final request = ++_scamContactsRequest;
+    scamContacts = const [];
+    if (!silent) errorMessage = null;
+    notifyListeners();
     try {
       final loaded = await (api as CatalogScamApi).getScamContacts();
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration || request != _scamContactsRequest) return;
       scamContacts = loaded;
       notifyListeners();
     } on ApiException catch (error) {
-      if (generation != _sessionGeneration || session == null) return;
+      if (generation != _sessionGeneration || request != _scamContactsRequest) return;
       if (!silent) errorMessage = error.message;
       notifyListeners();
     }
+  }
+
+  Future<ScamContact?> scamContactForCall(ScamContact displayed) async {
+    if (!displayed.canCall || api is! CatalogScamApi) return null;
+    final generation = _sessionGeneration;
+    final request = _scamContactsRequest + 1;
+    await refreshScamContacts(silent: false);
+    if (generation != _sessionGeneration || request != _scamContactsRequest) return null;
+    for (final contact in scamContacts) {
+      if (contact.canCall && contact.id == displayed.id &&
+          contact.recordVersion == displayed.recordVersion &&
+          contact.sourceContentHash == displayed.sourceContentHash &&
+          contact.sourceUrl == displayed.sourceUrl && contact.url == displayed.url &&
+          contact.phone == displayed.phone && contact.verifiedAt == displayed.verifiedAt &&
+          contact.expiresAt == displayed.expiresAt) {
+        return contact;
+      }
+    }
+    return null;
   }
 
   Future<bool> logScamGuidance({

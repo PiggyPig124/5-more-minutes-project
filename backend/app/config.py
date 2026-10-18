@@ -18,13 +18,18 @@ class Settings:
     database_url: str = "sqlite:///./anxin.db"
     # A random process-local secret is safe for an unconfigured local demo.
     # Deployments must provide AUTH_SECRET so tokens survive restarts.
-    auth_secret: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    auth_secret: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
     access_token_ttl_seconds: int = 60 * 60 * 24
-    model_api_key: str | None = None
+    model_api_key: str | None = field(default=None, repr=False)
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4o-mini"
     model_timeout_seconds: float = 45.0
+    model_max_output_tokens: int = 1024
     demo_mode: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.model_max_output_tokens) is not int or not 1 <= self.model_max_output_tokens <= 4096:
+            raise ValueError("MODEL_MAX_OUTPUT_TOKENS must be an integer from 1 to 4096")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -36,6 +41,10 @@ class Settings:
         """
 
         defaults = cls(auth_secret=secrets.token_urlsafe(32))
+        try:
+            output_tokens = int(os.getenv("MODEL_MAX_OUTPUT_TOKENS", str(defaults.model_max_output_tokens)))
+        except ValueError:
+            raise ValueError("MODEL_MAX_OUTPUT_TOKENS must be an integer from 1 to 4096") from None
         api_key = os.getenv("MODEL_API_KEY") or os.getenv("OPENAI_API_KEY")
         environment = os.getenv("APP_ENV", defaults.environment).lower()
         configured_secret = os.getenv("AUTH_SECRET")
@@ -61,6 +70,7 @@ class Settings:
             model_base_url=os.getenv("MODEL_BASE_URL", os.getenv("OPENAI_BASE_URL", defaults.model_base_url)),
             model_name=os.getenv("MODEL_NAME", os.getenv("OPENAI_MODEL", defaults.model_name)),
             model_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", str(defaults.model_timeout_seconds))),
+            model_max_output_tokens=output_tokens,
             demo_mode=os.getenv("DEMO_MODE", "").lower() in {"1", "true", "yes", "on"},
         )
 

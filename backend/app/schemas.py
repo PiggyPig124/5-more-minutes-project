@@ -163,7 +163,7 @@ class SendMessageOut(BaseModel):
     user_message: MessageOut
     assistant_message: MessageOut
     action: ActionOut | None = None
-    mode: Literal["deterministic_demo", "openai_compatible", "error", "safety_intervention"]
+    mode: Literal["deterministic_demo", "openai_compatible", "error", "safety_intervention", "official_guidance"]
 
 
 class ActionDecisionRequest(BaseModel):

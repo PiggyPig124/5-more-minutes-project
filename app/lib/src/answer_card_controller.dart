@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'answer_card_api.dart';
 import 'api_client.dart' show ApiException;
+import 'guest_answer_sources.dart';
 
 const _aiScope =
     'AI answer is not independently verified. Sources are references only.';
@@ -326,7 +327,8 @@ class AnswerCardController extends ChangeNotifier {
           originalText: originalText,
           template: template,
           owned: owned);
-  void prepareGuestAnswer(String content) {
+  void prepareGuestAnswer(String content,
+      {List<AnswerCardSource> publicSources = const []}) {
     if (_disposed || !isGuest || _mutation || content.trim().isEmpty) return;
     _draftGeneration++;
     _activePrepare = null;
@@ -344,7 +346,10 @@ class AnswerCardController extends ChangeNotifier {
           for (var i = 0; i < paragraphs.length; i++)
             AnswerCardSection(id: 'ram:$i', text: paragraphs[i])
         ],
-        sources: const [],
+        sources: parseGuestAnswerSources({
+          'answer_card_sources_version': 1,
+          'answer_card_sources': publicSources.map((source) => source.toJson()).toList(),
+        }),
         mode: 'assistant_answer',
         scope: _aiScope,
         originalText: content);

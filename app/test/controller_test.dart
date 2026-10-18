@@ -217,7 +217,8 @@ void main() {
           id: 'action-1',
           kind: ActionKind.task,
           title: '提醒覆診',
-          description: '星期五上午十時');
+          description: '虛構提醒測試',
+          dueAtText: '2099-01-02T10:00:00+08:00');
     final controller =
         AppController(api: api, sessionStore: SessionStore(MemoryLocalStore()));
     expect(

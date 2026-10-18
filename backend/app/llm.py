@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .config import Settings
+from .task_due_at import explicit_demo_due_at
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +305,8 @@ class DeterministicDemoAdapter:
             evidence_text += f"\n官方來源：{first['url']}（核對日期：{first['verified_at']}）。是否符合資格須由服務機構確認。"
         if is_explicit_task_request(user_message):
             title = _extract_task_title(user_message)
-            proposal = {"type": "care_task", "title": title, "description": "", "due_at": None}
+            proposal = {"type": "care_task", "title": title, "description": "",
+                        "due_at": explicit_demo_due_at(user_message)}
             empathy = ""
             if any(
                 word in user_message.casefold()
@@ -426,7 +428,8 @@ class OpenAICompatibleAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    async def reply(self, context: dict[str, Any], user_message: str) -> AgentReply:
+    async def reply(self, context: dict[str, Any], user_message: str, *,
+                    strict_readonly: bool = False) -> AgentReply:
         url = self.settings.model_base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
@@ -514,6 +517,7 @@ class OpenAICompatibleAdapter:
             "model": self.settings.model_name,
             "messages": messages,
             "temperature": 0.2,
+            "max_tokens": self.settings.model_max_output_tokens,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "companion_turn", "strict": True, "schema": _TURN_SCHEMA},
@@ -525,15 +529,30 @@ class OpenAICompatibleAdapter:
                 response = await client.post(url, headers=headers, json=body)
                 response.raise_for_status()
                 data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            parsed = _parse_model_content(content)
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
+            if strict_readonly:
+                if choice.get("finish_reason") != "stop" or not isinstance(content, str):
+                    raise ValueError("incomplete read-only response")
+                # The ordinary chat fallback is intentionally unavailable here.
+                # Never convert malformed/truncated JSON into a successful draft.
+                parsed = json.loads(content)
+                if (not isinstance(parsed, dict)
+                        or set(parsed) != {"text", "proposed_task", "memory_actions"}
+                        or parsed["proposed_task"] is not None
+                        or parsed["memory_actions"] != []):
+                    raise ValueError("read-only response must contain text and no actions")
+            else:
+                parsed = _parse_model_content(content)
             text = parsed.get("text")
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("provider response text must be a non-empty string")
+            if strict_readonly and len(text) >= 10000:
+                raise ValueError("read-only response exceeds complete-text limit")
             proposal = sanitize_proposal(user_message, parsed.get("proposed_task"))
             memory_actions = _validate_memory_actions(parsed.get("memory_actions", []))
             return AgentReply(
-                text=text[:10000],
+                text=text if strict_readonly else text[:10000],
                 proposed_task=proposal,
                 mode=self.mode,
                 memory_actions=memory_actions,

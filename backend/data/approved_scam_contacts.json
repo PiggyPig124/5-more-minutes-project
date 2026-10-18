@@ -1,0 +1,47 @@
+[
+  {
+    "id": "approved-scam-phone-fraud",
+    "source_id": "scam-phone-fraud",
+    "source_content_hash": "d739fbc0348fc857cd81d7a56905499e364f27e1db82c117d39eacb2d307fda4",
+    "source_url": "https://www.police.gov.hk/ppp_tc/04_crime_matters/adcc/",
+    "contact_entry": "警方反詐騙熱線：18222",
+    "name_en": "Police Anti-Deception Coordination Centre",
+    "description": "官方防騙查詢。",
+    "description_en": "Official anti-scam enquiries.",
+    "status": "approved",
+    "reviewed_at": "2026-10-15T04:52:25.880247+00:00",
+    "expires_at": "2027-01-13T04:52:25.880247+00:00",
+    "evidence_url": "https://www.police.gov.hk/ppp_en/04_crime_matters/adcc/index.html",
+    "evidence_excerpt": "Anti-Scam Helpline 18222"
+  },
+  {
+    "id": "approved-scam-online-shopping",
+    "source_id": "scam-online-shopping",
+    "source_content_hash": "2bfe4904831e3689b772b10b39e467beb61b7cf215f9ceae23b008c3df6eb7d2",
+    "source_url": "https://www.consumer.org.hk",
+    "contact_entry": "消費者委員會：2929 2222",
+    "name_en": "Consumer Council",
+    "description": "消費投訴查詢。",
+    "description_en": "Consumer complaint enquiries.",
+    "status": "approved",
+    "reviewed_at": "2026-10-15T04:52:25.880247+00:00",
+    "expires_at": "2027-01-13T04:52:25.880247+00:00",
+    "evidence_url": "https://www.consumer.org.hk/tc/complaints-and-services",
+    "evidence_excerpt": "電話投訴 2929 2222"
+  },
+  {
+    "id": "approved-scam-investment",
+    "source_id": "scam-investment",
+    "source_content_hash": "c9f74780c7904b15e8b1eae518ad357c3009e28c9878ba8fba16dfa621337a9a",
+    "source_url": "https://www.hkma.gov.hk",
+    "contact_entry": "金管局公眾查詢：2878 8222",
+    "name_en": "Hong Kong Monetary Authority",
+    "description": "公眾查詢服務。",
+    "description_en": "Public enquiry service.",
+    "status": "approved",
+    "reviewed_at": "2026-10-15T04:52:25.880247+00:00",
+    "expires_at": "2027-01-13T04:52:25.880247+00:00",
+    "evidence_url": "https://www.hkma.gov.hk/eng/other-information/contact-us",
+    "evidence_excerpt": "Public Enquiry Service / Enquiry Line (852) 2878 8222"
+  }
+]

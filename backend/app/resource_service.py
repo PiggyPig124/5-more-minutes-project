@@ -185,15 +185,45 @@ class ResourceService:
         records: list[ResourceRecord] | tuple[ResourceRecord, ...] | None = None,
         *,
         data_path: str | Path | None = None,
+        review_status_path: str | Path | None = None,
         embedding_provider: EmbeddingProvider | None | object = _UNSET,
     ) -> None:
         if records is None:
             records = self._load_records(data_path)
-        self.records = tuple(records)
+        # Keep original evidence intact. Only the eligible manifest is used by
+        # retrieval, database reconciliation, embeddings and card bindings.
+        self.raw_records = tuple(records)
+        review_status = self._load_review_status(review_status_path)
+        self.records = tuple(record for record in self.raw_records if record.id not in review_status)
         self.embedding_provider: EmbeddingProvider | None = (
             _configured_embedding_provider() if embedding_provider is _UNSET else embedding_provider  # type: ignore[assignment]
         )
         self._embedding_cache: dict[str, tuple[str, str, list[float]]] = {}
+
+    @staticmethod
+    def _load_review_status(review_status_path: str | Path | None) -> dict[str, dict[str, Any]]:
+        """Read reversible operator holds; never infer approval from a date/URL.
+
+        Removing a hold after review restores the original record on the next
+        service construction/restart. This is separate from immutable source
+        evidence and does not migrate/delete any database or saved card.
+        """
+        path = (Path(review_status_path) if review_status_path is not None else
+                Path(__file__).resolve().parents[1] / "data" / "resource_review_status.json")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"unable to load resource review status: {path}") from exc
+        if (not isinstance(raw, dict) or raw.get("schema_version") != 1
+                or not isinstance(raw.get("records"), dict)):
+            raise RuntimeError("invalid resource review status")
+        for source_id, entry in raw["records"].items():
+            if (not isinstance(source_id, str) or not source_id.strip()
+                    or not isinstance(entry, dict) or entry.get("status") != "unverified"
+                    or not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
+                    or not isinstance(entry.get("original_evidence"), dict)):
+                raise RuntimeError("invalid resource review status entry")
+        return raw["records"]
 
     @staticmethod
     def _load_records(data_path: str | Path | None) -> tuple[ResourceRecord, ...]:
@@ -459,10 +489,12 @@ class ResourceService:
             key=lambda pair: (-scores.get(pair[0].id, pair[1]), -pair[1], pair[0].id),
         )[:limit]
         records = [record for record, _ in ranked]
+        authorities = {record.id: record.source_authority for record in self.records}
         items = [
             ResourceItem(
                 id=record.id,
                 title=record.title,
+                organisation=authorities.get(record.id),
                 excerpt=record.excerpt,
                 url=record.url,
                 verified_at=record.verified_at,

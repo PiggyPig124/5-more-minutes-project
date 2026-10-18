@@ -11,6 +11,7 @@ from .llm import (
     safety_intervention_reply,
     sanitize_proposal,
 )
+from .official_guidance import render_navigation
 
 try:  # LangGraph is a production dependency, but import failure should not break demo startup.
     from langgraph.graph import END, START, StateGraph
@@ -75,6 +76,14 @@ class ConversationOrchestrator:
         return {"urgent_risk": False}
 
     async def _respond(self, state: ConversationState) -> dict[str, Any]:
+        context = state.get('context', {})
+        domain = context.get('guidance_domain')
+        if domain in ('transport', 'healthcare'):
+            # Safety has already run. This fixed signpost never sends a private
+            # navigation query to a provider or generates booking/task actions.
+            return {'reply': AgentReply(
+                text=render_navigation(domain, context.get('resource_sources', []), state['user_message']),
+                proposed_task=None, mode='official_guidance')}
         reply = await self.adapter.reply(state.get("context", {}), state["user_message"])
         # Providers may be misconfigured or return an unsafe structured value;
         # enforce the explicit-intent policy at the orchestration boundary.

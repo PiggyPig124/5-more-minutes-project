@@ -82,10 +82,15 @@ def test_live_api_get_then_confirm(setup, monkeypatch, different_owner, operatio
             from sqlalchemy import select
             if operation in {'confirm', 'create', 'save', 'patch'}:
                 persisted=db.get(PersonalMemory, confirmed.json()['id'])
-                assert persisted.owner_id == owner['account']['id']
-                assert memory_revision(db, persisted.owner_id) == revision+1
-                assert persisted.content == (payload['content'] if payload else 'Synthetic concurrent candidate')
-                assert persisted.status == ('candidate' if operation in {'create', 'patch'} else 'confirmed')
+                if operation == 'create':
+                    assert persisted is None  # Preview is RAM-only, including during contended GET.
+                    assert confirmed.json()['status'] == 'candidate'
+                    assert memory_revision(db, owner['account']['id']) == revision
+                else:
+                    assert persisted.owner_id == owner['account']['id']
+                    assert memory_revision(db, persisted.owner_id) == revision+1
+                    assert persisted.content == (payload['content'] if payload else 'Synthetic concurrent candidate')
+                    assert persisted.status == 'confirmed'
             elif operation in {'chat', 'check_in', 'check_in_new'}:
                 rows=db.scalars(select(Message).where(Message.conversation_id==(confirmed.json()['conversation_id'] if operation == 'check_in_new' else conversation.json()['id']))).all()
                 assert len(rows)==2 and {row.ordinal for row in rows}=={1,2}
@@ -93,9 +98,12 @@ def test_live_api_get_then_confirm(setup, monkeypatch, different_owner, operatio
             else:
                 assert confirmed.json()['items'][0]['id']==memory_id
                 assert memory_revision(db, owner['account']['id'])==revision
-        if operation in {'confirm', 'create', 'save', 'patch'}:
+        if operation in {'confirm', 'save', 'patch'}:
             stale_id=confirmed.json()['id'] if operation == 'patch' else memory_id
             assert client.post(f'/memories/{stale_id}/confirm', headers=confirm_headers).status_code == 409
+        elif operation == 'create':
+            # Draft creation must not invalidate an older still-reviewed preview.
+            assert client.post(f'/memories/{memory_id}/confirm', headers=confirm_headers).status_code == 200
     finally:
         event.remove(engine, 'before_cursor_execute', before_sql)
         event.remove(engine, 'handle_error', on_sql_error)

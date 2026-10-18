@@ -25,6 +25,7 @@ from ..memory_service import (
     memory_revision,
 )
 from ..resource_service import search_resources
+from ..official_guidance import guidance_domain, navigation_resources
 from ..safety_models import SafetyEvent
 from ..llm import detect_urgent_risk
 from ..schemas import (
@@ -141,7 +142,7 @@ def _replay_send(
     action_id = metadata.get("action_id")
     action = db.get(ActionProposal, action_id) if action_id else None
     mode = metadata.get("mode")
-    if mode not in {"deterministic_demo", "openai_compatible", "error", "safety_intervention"}:
+    if mode not in {"deterministic_demo", "openai_compatible", "error", "safety_intervention", "official_guidance"}:
         mode = "error"
     return SendMessageOut(
         conversation=_conversation_out(conversation),
@@ -224,7 +225,10 @@ async def send_message(
 ) -> SendMessageOut:
     owner_id = account.id
     urgent_risk = detect_urgent_risk(payload.content)
-    memory_enabled = account.role == "elder" and not urgent_risk and memory_consent_enabled(db, owner_id)
+    domain = guidance_domain(payload.content)
+    memory_enabled = (account.role == "elder" and not urgent_risk
+                      and domain not in ('transport', 'healthcare')
+                      and memory_consent_enabled(db, owner_id))
     context_revision = memory_revision(db, owner_id)
     conversation = get_owned_conversation(db, account, conversation_id)
     if payload.client_message_id:
@@ -256,16 +260,13 @@ async def send_message(
     memory_management = model_memory_context(db, owner_id) if memory_enabled else []
     if memory_enabled:
         context["memory_management"] = {"active_memories": memory_management}
-    resource_query = bool(re.search(
-        r"福利|津貼|津贴|補助|补助|資助|资助|醫療費|医疗费|覆診費|覆诊费|"
-        r"照顧者支援|照顾者支援|社區照顧|社区照顾|長者中心|长者中心|"
-        r"\bwelfare\b|\bsubsid(?:y|ies)\b|\bfee waiver\b|\bcaregiver support\b",
-        payload.content, re.IGNORECASE,
-    ))
+    resource_query = domain is not None
     context["resource_query"] = resource_query
+    context["guidance_domain"] = domain
     resource_result = {"items": [], "retrieval_mode": "not_requested", "conflicts": []}
     if resource_query and not urgent_risk:
-        resource_result = await search_resources(db, payload.content[:500])
+        resource_result = (navigation_resources(domain) if domain in ('transport', 'healthcare')
+                           else await search_resources(db, payload.content[:500]))
     context["resource_sources"] = resource_result["items"]
     context["resource_conflicts"] = resource_result["conflicts"]
     community_result = None

@@ -218,7 +218,8 @@ def test_correction_suppression_and_deletion_propagate(tmp_path: Path) -> None:
         )
         assert corrected.status_code == 200, corrected.text
         new_id = corrected.json()["id"]
-        assert new_id != old_id and corrected.json()["status"] == "candidate"
+        # The owner explicitly chose Save changes; only the final version is persisted.
+        assert new_id != old_id and corrected.json()["status"] == "confirmed"
         assert client.get(f"/memories/{old_id}", headers=_headers(elder)).status_code == 404
         assert client.get("/stories", headers=_headers(elder)).json() == []
         messages = client.get(f"/conversations/{conversation['id']}/messages", headers=_headers(elder)).json()

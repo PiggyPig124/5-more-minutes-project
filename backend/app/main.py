@@ -21,6 +21,7 @@ from .resource_service import seed_resources
 from .routers import safety, check_ins, speech, scam, activity_catalog
 from .seed_extras import seed_community_activities, seed_scam_resources
 from .routers import notifications
+from .routers import content_simplification
 from .care_service import collect_notifications
 from .models import Account
 from .schemas import CheckInTriggerRequest
@@ -105,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(answer_cards.router)
+    app.include_router(content_simplification.router)
     app.include_router(auth.router)
     app.include_router(guest.router)
     app.include_router(community.router)

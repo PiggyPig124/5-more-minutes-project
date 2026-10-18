@@ -23,9 +23,18 @@ import 'family_connections_screen.dart';
 import 'answer_card_controller.dart';
 import 'answer_card_screen.dart';
 import 'answer_card_editor.dart';
+import 'guest_answer_sources.dart';
 import 'answer_card_sharing_controller.dart';
 import 'answer_card_sharing_screen.dart';
 import 'community_search_notice.dart';
+import 'human_help_screen.dart';
+import 'help_search_panel.dart';
+import 'interaction_preferences.dart';
+import 'voice_draft_button.dart';
+import 'community_prompt_handoff.dart';
+import 'memory_browse_categories.dart';
+import 'message_content_actions.dart';
+import 'content_simplification_binding.dart';
 
 final apiProvider = Provider<AnxinApi>((ref) => RestApiClient());
 final localStoreProvider = Provider<LocalStore>((ref) => SecureLocalStore());
@@ -109,7 +118,8 @@ void _openAnswerCardDraft(BuildContext context, WidgetRef ref, ChatMessage messa
   if (source.session != null && message.conversationId != 'guest') {
     unawaited(cards.prepareFromMessage(message.id));
   } else if (source.session == null && source.guestSession != null) {
-    cards.prepareGuestAnswer(message.body);
+    cards.prepareGuestAnswer(message.body,
+        publicSources: parseGuestAnswerSources(message.metadata));
   } else {
     return;
   }
@@ -169,6 +179,8 @@ ThemeData _buildTheme() {
   );
   final base = ThemeData(
     useMaterial3: true,
+    fontFamily: 'Roboto',
+    fontFamilyFallback: const ['NotoSansTC'],
     colorScheme: scheme,
     scaffoldBackgroundColor: cream,
     visualDensity: VisualDensity.standard,
@@ -180,6 +192,8 @@ ThemeData _buildTheme() {
       centerTitle: false,
       toolbarHeight: 68,
       titleTextStyle: TextStyle(
+          fontFamily: 'Roboto',
+          fontFamilyFallback: ['NotoSansTC'],
           color: Color(0xFF183D3C), fontSize: 22, fontWeight: FontWeight.w700),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -246,18 +260,34 @@ class RootView extends ConsumerStatefulWidget {
   ConsumerState<RootView> createState() => _RootViewState();
 }
 
-class _RootViewState extends ConsumerState<RootView> {
+class _RootViewState extends ConsumerState<RootView> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     Future<void>.microtask(() => ref.read(appControllerProvider).initialize());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.read(appControllerProvider).expireGuestSessionIfNeeded();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
     if (!controller.initialized) return const _LoadingView();
-    if (controller.guestSession != null) return const GuestShell();
+    if (controller.guestSession != null) {
+      return GuestShell(key: ValueKey(controller.guestSessionIdentity));
+    }
     if (!controller.isSignedIn) return const LoginScreen();
     return ShellScreen(key: ValueKey(controller.user!.id));
   }
@@ -456,8 +486,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     if (error != null) ErrorBanner(message: error),
                     const SizedBox(height: 8),
                     FilledButton.icon(
-                      onPressed: controller.loading ? null : _submit,
-                      icon: controller.loading
+                      onPressed: (controller.loading || controller.guestStarting) ? null : _submit,
+                      icon: (controller.loading || controller.guestStarting)
                           ? const SizedBox(
                               width: 22,
                               height: 22,
@@ -473,7 +503,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
-                      onPressed: controller.loading
+                      onPressed: (controller.loading || controller.guestStarting)
                           ? null
                           : () async {
                               if (await controller.startGuestSession() &&
@@ -521,13 +551,21 @@ class GuestShell extends ConsumerStatefulWidget {
   ConsumerState<GuestShell> createState() => _GuestShellState();
 }
 
+Widget _interactionSettingsButton(BuildContext context) => IconButton(
+  key: const Key('interaction-settings'),
+  tooltip: tr(context, '設定', 'Settings'),
+  icon: const Icon(Icons.settings_outlined),
+  onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const SettingsScreen())),
+);
+
 class _GuestShellState extends ConsumerState<GuestShell> {
   int _index = 0;
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, '安心伴 · 訪客', 'Anxin · Guest'))),
+      appBar: AppBar(title: Text(tr(context, '安心伴 · 訪客', 'Anxin · Guest')), actions: [_interactionSettingsButton(context)]),
       body: SafeArea(
           child: [
         ListView(padding: const EdgeInsets.all(20), children: [
@@ -607,8 +645,29 @@ class _GuestConversationScreenState
     extends ConsumerState<GuestConversationScreen> {
   final _text = TextEditingController();
   final _scroll = ScrollController();
+  late final VoiceInputController _voiceInput;
+  late final AppController _guestController;
+  Object? _guestIdentity;
+  @override
+  void initState() {
+    super.initState();
+    _voiceInput = ref.read(voiceInputProvider);
+    _guestController = ref.read(appControllerProvider);
+    _guestIdentity = _guestController.guestSessionIdentity;
+    _guestController.addListener(_syncGuestIdentity);
+  }
+
+  void _syncGuestIdentity() {
+    final identity = _guestController.guestSessionIdentity;
+    if (identity == _guestIdentity) return;
+    _guestIdentity = identity;
+    _text.clear();
+    _voiceInput.detach();
+  }
   @override
   void dispose() {
+    _guestController.removeListener(_syncGuestIdentity);
+    _voiceInput.detach();
     _text.dispose();
     _scroll.dispose();
     super.dispose();
@@ -616,9 +675,13 @@ class _GuestConversationScreenState
 
   Future<void> _send() async {
     final value = _text.text.trim();
-    if (value.isEmpty) return;
+    final controller = ref.read(appControllerProvider);
+    if (value.isEmpty || controller.guestSending || controller.guestSession == null) return;
+    final identity = controller.guestSessionIdentity;
     _text.clear();
-    await ref.read(appControllerProvider).sendGuestMessage(value);
+    final sent = await controller.sendGuestMessage(value);
+    if (!mounted || identity != controller.guestSessionIdentity) return;
+    if (!sent && _text.text.isEmpty) _text.text = value;
     if (mounted && _scroll.hasClients) {
       _scroll.animateTo(_scroll.position.maxScrollExtent,
           duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
@@ -628,18 +691,25 @@ class _GuestConversationScreenState
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
+    final preference = ref.watch(interactionPreferenceProvider);
+    final guestIdentity = controller.guestSessionIdentity;
     return Scaffold(
       appBar: AppBar(
           title: Text(tr(context, '訪客對話', 'Guest conversation')),
           actions: [
-            TextButton(
-                onPressed: controller.loading
-                    ? null
-                    : () => controller.endGuestSession(),
-                child: Text(tr(context, '結束對話', 'End session'))),
+            _interactionSettingsButton(context),
+            IconButton(
+                onPressed: () => controller.endGuestSession(),
+                tooltip: tr(context, '結束對話', 'End session'),
+                icon: const Icon(Icons.logout_rounded)),
           ]),
       body: SafeArea(
           child: Column(children: [
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(18),
+            controller: _scroll,
+            children: [
         Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
@@ -648,37 +718,31 @@ class _GuestConversationScreenState
                 context,
                 '訪客對話只在本次工作階段使用，不會保存到記憶庫。結束後，這台裝置上的對話紀錄會清除。',
                 'Guest chats are for this session only and are not saved to a memory library. Ending the session clears the conversation from this device.'))),
-        Expanded(
-          child: controller.guestMessages.isEmpty
-              ? Center(
-                  child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                          tr(context, '你可以直接提出生活上的問題，無需註冊。',
-                              'Ask an everyday question without creating an account.'),
-                          style: Theme.of(context).textTheme.titleMedium,
-                          textAlign: TextAlign.center)))
-              : ListView(
-                  padding: const EdgeInsets.all(18),
-                  controller: _scroll,
-                  children: [
-                      for (final entry in controller.guestMessages.indexed)
-                        MessageBubble(
-                            message: ChatMessage(
-                                id: 'guest-${entry.$1}',
-                                conversationId: 'guest',
-                                body: entry.$2.$1,
-                                isFromUser: entry.$2.$2,
-                                createdAt: null,
-                                metadata:
-                                    controller.guestMessageMetadata[entry.$1] ??
-                                        const {}))
-                    ]),
+              if (controller.guestMessages.isEmpty)
+                Padding(padding: const EdgeInsets.all(24),
+                  child: Text(tr(context, '可以直接問日常生活的問題，毋須帳號。',
+                      'Ask an everyday question without creating an account.'),
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center)),
+              for (final entry in controller.guestMessages.indexed)
+                MessageBubble(message: ChatMessage(
+                  id: 'guest-${entry.$1}', conversationId: 'guest',
+                  body: entry.$2.$1, isFromUser: entry.$2.$2, createdAt: null,
+                  metadata: controller.guestMessageMetadata[entry.$1] ?? const {})),
+            ],
+          ),
         ),
+        if (controller.guestSending)
+          Padding(padding: const EdgeInsets.all(8), child: Semantics(liveRegion: true,
+            child: Text(tr(context, '正在等候回覆…', 'Waiting for a reply…')))),
         if (controller.errorMessage != null)
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: ErrorBanner(message: controller.errorMessage!)),
+        if (preference.prefersSpeaking)
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Text(tr(context, '可按麥克風說話，亦可隨時打字。',
+                'Tap the microphone to speak, or type at any time.'))),
         Material(
             color: Colors.white,
             elevation: 5,
@@ -688,19 +752,29 @@ class _GuestConversationScreenState
                   Expanded(
                       child: TextField(
                           controller: _text,
+                          enabled: guestIdentity != null,
                           minLines: 1,
                           maxLines: 4,
                           onSubmitted: (_) => _send(),
                           decoration: InputDecoration(
+                              hintMaxLines: 1,
                               hintText:
                                   tr(context, '輸入你的問題…', 'Type your question…'),
                               prefixIcon:
                                   const Icon(Icons.edit_note_rounded)))),
+                  if (preference.allowsVoice) ...[
+                    const SizedBox(width: 8),
+                    VoiceDraftButton(voiceController: _voiceInput,
+                      draftController: _text, onDraftChanged: (_) {},
+                      enabled: guestIdentity != null && !controller.guestSending,
+                      canAcceptTranscript: () => mounted && guestIdentity != null &&
+                          guestIdentity == controller.guestSessionIdentity),
+                  ],
                   const SizedBox(width: 8),
                   IconButton.filled(
-                      onPressed: controller.loading ? null : _send,
+                      onPressed: guestIdentity == null || controller.guestSending ? null : _send,
                       tooltip: tr(context, '傳送', 'Send'),
-                      icon: controller.loading
+                      icon: controller.guestSending
                           ? const SizedBox(
                               width: 22,
                               height: 22,
@@ -713,7 +787,8 @@ class _GuestConversationScreenState
 }
 
 class CommunityScreen extends ConsumerStatefulWidget {
-  const CommunityScreen({super.key});
+  const CommunityScreen({this.publicOnly = false, super.key});
+  final bool publicOnly;
   @override
   ConsumerState<CommunityScreen> createState() => _CommunityScreenState();
 }
@@ -733,11 +808,14 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
   void initState() {
     super.initState();
     final initial = ref.read(appControllerProvider);
-    _topic = initial.communityTopic;
-    _targetGroup = initial.communityTargetGroup;
-    _area.text = initial.communityArea;
-    Future<void>.microtask(
-        () => ref.read(appControllerProvider).refreshCommunity());
+    if (widget.publicOnly) {
+      Future<void>.microtask(() => initial.searchCommunity(topic: '', area: '', targetGroup: 'elderly'));
+    } else {
+      _topic = initial.communityTopic;
+      _targetGroup = initial.communityTargetGroup;
+      _area.text = initial.communityArea;
+      Future<void>.microtask(() => initial.refreshCommunity());
+    }
   }
 
   Future<void> _decide(SkillSuggestion suggestion, String decision) async {
@@ -774,13 +852,13 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
     final canPersonalize =
-        controller.isElder && controller.memoryConsentEnabled;
+        !widget.publicOnly && controller.isElder && controller.memoryConsentEnabled;
     return RefreshIndicator(
-        onRefresh: () => controller.refreshCommunity(),
+        onRefresh: () => controller.refreshCommunity(skills: !widget.publicOnly),
         child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
             children: [
-              OutlinedButton.icon(
+              if (!widget.publicOnly) OutlinedButton.icon(
                   onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                           builder: (_) => const ActivityCatalogScreen())),
@@ -794,6 +872,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                   tr(context, '資料來自康文署公開快照；主題及地區只在安心伴內篩選，報名前請向主辦機構確認。', 'Activities come from the LCSD public snapshot. Topic and district filters stay within Echo; confirm details with the organizer before attending.'),
                   style: Theme.of(context).textTheme.bodyLarge),
               const SizedBox(height: 18),
+              if (!widget.publicOnly) ...[
               SectionTitle(title: tr(context, '發揮所長', 'Share your skills')),
               const SizedBox(height: 9),
               if (!controller.isElder)
@@ -843,8 +922,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                                 ])
                               else
                                 Text(skill.status == 'confirmed'
-                                    ? tr(context, '已確認，可查看相關機會。',
-                                        'Confirmed. Matching opportunities are shown below.')
+                                    ? confirmedSkillHandoffText(context, listedCount: controller.opportunities.length, searchState: controller.opportunitySearchState)
                                     : tr(context, '已拒絕', 'Rejected')),
                             ])))),
               if (controller.opportunities.isNotEmpty) ...[
@@ -872,7 +950,8 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                       .any((item) => item.status == 'confirmed'))
                 EmptyCard(
                     icon: Icons.search_off_rounded,
-                    message: tr(context, '義工機會搜尋尚未接入資料來源。', 'Volunteer opportunity search is not enabled yet.')),
+                    message: emptyOpportunityText(context, controller.opportunitySearchState)),
+              ],
               const SizedBox(height: 22),
               SectionTitle(
                   title: tr(context, '搜尋康體活動', 'Search community activities')),
@@ -1061,7 +1140,8 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                 const SizedBox(height: 12),
                 ErrorBanner(
                     message: controller.errorMessage!,
-                    onRetry: () => controller.refreshCommunity())
+                    onRetry: () => controller.refreshCommunity(
+                        skills: !widget.publicOnly))
               ],
             ]));
   }
@@ -1189,13 +1269,6 @@ class HelpScreen extends ConsumerStatefulWidget {
 }
 
 class _HelpScreenState extends ConsumerState<HelpScreen> {
-  final _query = TextEditingController();
-  @override
-  void dispose() {
-    _query.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
@@ -1217,6 +1290,22 @@ class _HelpScreenState extends ConsumerState<HelpScreen> {
               style: Theme.of(context).textTheme.bodyLarge),
           const SizedBox(height: 16),
           FeatureCard(
+              icon: Icons.support_agent_rounded,
+              title: tr(context, '找人幫忙', 'Ask a person'),
+              description: tr(context, '查看已核實的公共支援，或自行選擇聯絡家人。',
+                  'Find verified public support, or choose to contact family.'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => HumanHelpScreen(
+                    api: controller.api is GuestResourceApi
+                        ? controller.api as GuestResourceApi : null,
+                    onOpenFamily: controller.isSignedIn ? () {
+                      if (!ref.read(appControllerProvider).isSignedIn) return;
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => const FamilyMessagesScreen()));
+                    } : null,
+                  )))),
+          const SizedBox(height: 10),
+          FeatureCard(
               icon: Icons.forum_outlined,
               title: tr(context, '詢問生活問題', 'Ask a practical question'),
               description: tr(context, '從首頁開始對話；也可以不登入以訪客身份使用。',
@@ -1224,81 +1313,7 @@ class _HelpScreenState extends ConsumerState<HelpScreen> {
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                   builder: (_) => const ElderChatScreen()))),
           const SizedBox(height: 10),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                            tr(context, '搜尋生活資訊',
-                                'Search practical information'),
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 10),
-                        TextField(
-                            controller: _query,
-                            textInputAction: TextInputAction.search,
-                            onSubmitted: (_) =>
-                                controller.searchHelp(_query.text),
-                            decoration: InputDecoration(
-                                labelText: tr(context, '你想了解甚麼？',
-                                    'What would you like to know?'),
-                                suffixIcon: IconButton(
-                                    onPressed: () =>
-                                        controller.searchHelp(_query.text),
-                                    icon: const Icon(Icons.search_rounded)))),
-                      ]))),
-          if (controller.guestHelpResources.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            ...controller.guestHelpResources.map((item) => Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(item.title,
-                              style: Theme.of(context).textTheme.titleMedium),
-                          if (item.excerpt.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text(item.excerpt)
-                          ],
-                          if (item.verifiedAt != null) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                                tr(
-                                    context,
-                                    '核實日期：${_dateLabel(context, item.verifiedAt)}',
-                                    'Verified: ${_dateLabel(context, item.verifiedAt)}'),
-                                style: Theme.of(context).textTheme.bodySmall)
-                          ],
-                          if (item.nextSteps.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            Text(tr(context, '下一步', 'Next steps'),
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700)),
-                            ...item.nextSteps.map((step) => Text('• $step'))
-                          ],
-                          if (item.url != null)
-                            TextButton.icon(
-                                onPressed: () => launchUrl(Uri.parse(item.url!),
-                                    mode: LaunchMode.externalApplication),
-                                icon: const Icon(Icons.open_in_new_rounded),
-                                label: Text(tr(context, '開啟官方來源',
-                                    'Open official source'))),
-                        ])))),
-          ] else if (_query.text.trim().isNotEmpty &&
-              controller.errorMessage == null)
-            Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: EmptyCard(
-                    icon: Icons.search_off_rounded,
-                    message: tr(context, '暫時找不到合適的已核實資料。請稍後再試，或直接查詢相關官方服務。',
-                        'No verified information matched. Try later or contact the relevant official service.'))),
-          if (controller.errorMessage != null) ...[
-            const SizedBox(height: 12),
-            ErrorBanner(message: controller.errorMessage!)
-          ],
+          HelpSearchPanel(controller: controller),
         ]);
   }
 }
@@ -1861,7 +1876,6 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   final _scrollController = ScrollController();
   bool _loadedDraft = false;
   late final VoiceInputController _voiceInput;
-  bool _voiceDisclosureAccepted = false;
   bool _showSafetySupport = false;
   final Set<String> _dismissedMemorySuggestions = <String>{};
   final Map<String, bool> _communityPromptAnswers = <String, bool>{};
@@ -1906,52 +1920,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     }
   }
 
-  Future<void> _toggleVoiceInput() async {
-    if (!_voiceDisclosureAccepted) {
-      final accepted = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(tr(context, '廣東話語音輸入', 'Cantonese voice input')),
-          content: Text(tr(
-            context,
-            '語音辨識由你的裝置或瀏覽器提供。咪高峰音訊會交由該語音服務處理，其資料政策由服務供應者決定；安心伴只會收到辨識文字。傳送前你可以檢查和修改文字。',
-            "Speech recognition is provided by your device or browser. Microphone audio is processed by that speech service under its provider's data policy; Anxin receives only the recognized text. Review and edit the transcript before sending.",
-          )),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(tr(context, '取消', 'Cancel')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(tr(context, '繼續', 'Continue')),
-            ),
-          ],
-        ),
-      );
-      if (accepted != true || !mounted) return;
-      _voiceDisclosureAccepted = true;
-    }
-    final initialDraft = _draftController.text.trim();
-    await _voiceInput.toggle(
-      onTranscript: (transcript) {
-        final updated =
-            initialDraft.isEmpty ? transcript : '$initialDraft $transcript';
-        _draftController.value = TextEditingValue(
-          text: updated,
-          selection: TextSelection.collapsed(offset: updated.length),
-        );
-        ref
-            .read(appControllerProvider)
-            .saveDraft(widget.conversation.id, updated);
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
-    final voice = ref.watch(voiceInputProvider);
+    final preference = ref.watch(interactionPreferenceProvider);
     final messages = controller.messagesFor(widget.conversation.id);
     final actions = controller.pendingActions
         .where((action) =>
@@ -1973,10 +1945,6 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
               Padding(
                   padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
                   child: ErrorBanner(message: controller.errorMessage!)),
-            if (voice.notice != null)
-              Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(voice.notice!, key: const Key('voice-notice'))),
             Expanded(
               child: messages.isEmpty && actions.isEmpty && !_showSafetySupport
                   ? ListView(padding: const EdgeInsets.all(24), children: [
@@ -2001,6 +1969,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                                   setState(() =>
                                       _communityPromptAnswers[message.id] =
                                           interested),
+                              onBrowsePublicActivities: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(builder: (context) => Scaffold(
+                                  appBar: AppBar(title: Text(tr(context, '公開活動', 'Public activities'))),
+                                  body: const CommunityScreen(publicOnly: true)))),
                             )),
                         ...actions.map((action) => ActionCard(action: action)),
                         if (_showSafetySupport)
@@ -2009,6 +1981,10 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                       ],
                     ),
             ),
+            if (preference.prefersSpeaking)
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: Text(tr(context, '可按麥克風說話，亦可隨時打字。',
+                    'Tap the microphone to speak, or type at any time.'))),
             Material(
               color: Colors.white,
               elevation: 5,
@@ -2032,23 +2008,14 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                             prefixIcon: Icon(Icons.edit_note_rounded)),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    IconButton.filledTonal(
-                      key: const Key('cantonese-voice-input'),
-                      tooltip: voice.isListening
-                          ? tr(context, '停止廣東話語音輸入',
-                              'Stop Cantonese voice input')
-                          : tr(context, '廣東話語音輸入', 'Cantonese voice input'),
-                      onPressed: busy ? null : _toggleVoiceInput,
-                      icon: Icon(voice.isListening
-                          ? Icons.stop_circle_rounded
-                          : Icons.mic_none_rounded),
-                      style: IconButton.styleFrom(
-                        minimumSize: const Size(54, 54),
-                        backgroundColor:
-                            voice.isListening ? const Color(0xFFF4D8D5) : null,
-                      ),
-                    ),
+                    if (preference.allowsVoice) ...[
+                      const SizedBox(width: 10),
+                      VoiceDraftButton(voiceController: _voiceInput,
+                        draftController: _draftController,
+                        onDraftChanged: (value) => ref.read(appControllerProvider)
+                            .saveDraft(widget.conversation.id, value),
+                        enabled: !busy),
+                    ],
                     const SizedBox(width: 10),
                     IconButton.filled(
                       tooltip: tr(context, '傳送訊息', 'Send message'),
@@ -2080,6 +2047,7 @@ class MessageBubble extends ConsumerWidget {
       this.onSuggestionDismissed,
       this.communityPromptAnswer,
       this.onCommunityPromptAnswered,
+      this.onBrowsePublicActivities,
       super.key});
 
   final ChatMessage message;
@@ -2087,39 +2055,50 @@ class MessageBubble extends ConsumerWidget {
   final VoidCallback? onSuggestionDismissed;
   final bool? communityPromptAnswer;
   final ValueChanged<bool>? onCommunityPromptAnswered;
+  final VoidCallback? onBrowsePublicActivities;
 
   Future<void> _saveSuggestion(BuildContext context, WidgetRef ref) async {
     final suggestion = message.memorySuggestion;
     if (suggestion == null) return;
     final editor = TextEditingController(text: suggestion.content);
+    TransitionRoute<dynamic>? reviewRoute;
     final content = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(tr(context, '保存這項記憶？', 'Save this memory?')),
-        content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(tr(context, '這份手動草稿在你按保存前不會寫入記憶。你可以先修改內容。',
-                  'This manual draft is not saved to Memory until you choose Save. You can edit it first.')),
-              const SizedBox(height: 12),
-              TextField(
-                  controller: editor,
-                  minLines: 2,
-                  maxLines: 5,
-                  decoration: InputDecoration(
-                      labelText: tr(context, '記憶內容', 'Memory text'))),
-            ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: Text(tr(context, '取消', 'Cancel'))),
-          FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, editor.text),
-              child: Text(tr(context, '確認保存', 'Save'))),
-        ],
-      ),
+      builder: (dialogContext) {
+        reviewRoute = ModalRoute.of(dialogContext);
+        return AlertDialog(
+          scrollable: true,
+          title: Text(tr(context, '保存這項記憶？', 'Save this memory?')),
+          content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${tr(context, '建議類別：', 'Suggested category: ')}${_memoryKindLabel(context, suggestion.kind)}'),
+                const SizedBox(height: 12),
+                Text(tr(context, '這份手動草稿在你按保存前不會寫入記憶。你可以先修改內容。',
+                    'This manual draft is not saved to Memory until you choose Save. You can edit it first.')),
+                const SizedBox(height: 12),
+                TextField(
+                    controller: editor,
+                    minLines: 2,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                        labelText: tr(context, '記憶內容', 'Memory text'))),
+              ]),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(tr(context, '取消', 'Cancel'))),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, editor.text),
+                child: Text(tr(context, '確認保存', 'Save'))),
+          ],
+        );
+      },
     );
+    // The popped result arrives before the dialog's exit transition finishes.
+    // Keep the focused TextField's controller alive until its route is removed.
+    await reviewRoute?.completed;
     editor.dispose();
     if (content == null || content.trim().isEmpty || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -2161,6 +2140,15 @@ class MessageBubble extends ConsumerWidget {
                     color: mine ? Colors.white : Colors.black87,
                     fontSize: 18,
                     height: 1.45)),
+            if (!mine && !message.pending && message.body.trim().isNotEmpty &&
+                (controller.session != null || controller.guestSession != null) &&
+                message.metadata['mode'] != 'error' &&
+                !const ['pending', 'processing', 'error', 'failed'].contains(message.metadata['status']))
+              MessageContentActions(original: message.body,
+                sessionIdentity: simplificationScope(controller),
+                contentVersion: simplificationVersion(message),
+                simplify: bindContentSimplification(controller,
+                    Localizations.localeOf(context).languageCode == 'en' ? 'en' : 'zh-Hant')),
             if (!mine && !message.pending && message.body.trim().isNotEmpty &&
                 controller.api is AnswerCardApi &&
                 (controller.session != null || controller.guestSession != null) &&
@@ -2222,59 +2210,12 @@ class MessageBubble extends ConsumerWidget {
                 ),
               ),
             ],
-            if (!mine &&
-                controller.isElder &&
-                controller.memoryConsentEnabled &&
+            if (!mine && controller.isElder && controller.memoryConsentEnabled &&
                 message.communityMemoryPrompt != null) ...[
               const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(13),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1EDF8),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(tr(context, '根據已保存的記憶', 'Based on a saved memory'),
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 5),
-                    Text(message.communityMemoryPrompt!.memoryContent),
-                    const SizedBox(height: 7),
-                    Text(tr(
-                      context,
-                      message.communityMemoryPrompt!.promptZh,
-                      message.communityMemoryPrompt!.promptEn,
-                    )),
-                    if (communityPromptAnswer == null) ...[
-                      const SizedBox(height: 10),
-                      Wrap(spacing: 8, runSpacing: 4, children: [
-                        FilledButton.tonal(
-                          onPressed: () =>
-                              onCommunityPromptAnswered?.call(true),
-                          child: Text(tr(context, '有興趣', 'Yes, interested')),
-                        ),
-                        TextButton(
-                          onPressed: () =>
-                              onCommunityPromptAnswered?.call(false),
-                          child: Text(tr(context, '暫時不用', 'Not now')),
-                        ),
-                      ]),
-                    ] else ...[
-                      const SizedBox(height: 8),
-                      Text(communityPromptAnswer!
-                          ? tr(
-                              context,
-                              '知道了。目前尚未接入核實的活動搜尋來源，所以這次沒有搜尋或顯示活動。',
-                              'Understood. Verified activity search is not connected yet, so nothing was searched or shown.',
-                            )
-                          : tr(context, '好，這次先略過。',
-                              'Okay, we can leave it for now.')),
-                    ],
-                  ],
-                ),
-              ),
+              CommunityPromptHandoff(prompt: message.communityMemoryPrompt!,
+                answer: communityPromptAnswer, onAnswered: onCommunityPromptAnswered,
+                onBrowsePublicActivities: onBrowsePublicActivities),
             ],
             if (!mine && message.memorySources.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -2367,6 +2308,8 @@ class MessageBubble extends ConsumerWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700)),
                       const SizedBox(height: 5),
                       Text(message.memorySuggestion!.content),
+                      const SizedBox(height: 5),
+                      Text('${tr(context, '建議類別：', 'Suggested category: ')}${_memoryKindLabel(context, message.memorySuggestion!.kind)}'),
                       if (message.memorySuggestion!.sensitivity ==
                               'sensitive' ||
                           message.memorySuggestion!.sensitivity ==
@@ -2416,6 +2359,8 @@ class ActionCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final controller = ref.watch(appControllerProvider);
     final busy = controller.updatingActionIds.contains(action.id);
+    final details = action.reminderDetails;
+    final confirmable = action.canConfirmAt(DateTime.now());
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       color: const Color(0xFFFFF0D7),
@@ -2434,6 +2379,29 @@ class ActionCard extends ConsumerWidget {
             ]),
             const SizedBox(height: 10),
             Text(action.title, style: Theme.of(context).textTheme.titleMedium),
+            if (action.kind == ActionKind.task) ...[
+              const SizedBox(height: 6),
+              if (details != null) ...[
+                Text(
+                    tr(context, '日期：${details.date}', 'Date: ${details.date}')),
+                Text(
+                    tr(context, '時間：${details.time}', 'Time: ${details.time}')),
+                Text(tr(context, '時區：${details.zone}',
+                    'Time zone: ${details.zone}')),
+              ],
+              if (!confirmable)
+                Text(tr(
+                    context,
+                    '請先補充事項、明確的未來日期、時間及 UTC 時差，再確認。現有資料缺失、無法確定或已過期；可返回對話補充。',
+                    'Please provide an event and an unambiguous future date, time and UTC offset. Details are missing, unclear or expired; return to the conversation to correct them.')),
+              const SizedBox(height: 6),
+              Text(tr(
+                  context,
+                  '行為：將此事項及到期時間儲存為待辦。確認不會啟用通知。只有先前已開啟「待辦提醒」，才會按現有通知設定排程；靜音時段可能延至 09:00，系統亦可能延遲或停止送達。',
+                  'Behaviour: Save a pending task with this due time. Confirmation does not enable notifications. Only previously enabled Task reminders use existing notification settings; quiet hours may defer to 09:00, and delivery may be delayed or suppressed.')),
+              Text(tr(context, '待辦屬於你；不會發送訊息、代為預約、建立日曆活動或自動向家人報告。',
+                  'Task owner: you. No message, booking, calendar event or automatic family report is sent.')),
+            ],
             if (action.description.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(action.description)
@@ -2448,7 +2416,7 @@ class ActionCard extends ConsumerWidget {
               children: [
                 Expanded(
                     child: FilledButton(
-                        onPressed: busy
+                        onPressed: busy || !confirmable
                             ? null
                             : () => ref
                                 .read(appControllerProvider)
@@ -2863,6 +2831,7 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
   final _savedKey = GlobalKey();
   final _selectedRows = <String, MemoryRecord>{};
   bool _viewSavedOnly = false;
+  MemoryBrowseCategory? _browseCategory;
 
   Future<void> _refresh() async {
     final controller = ref.read(appControllerProvider);
@@ -2974,8 +2943,9 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
   Widget build(BuildContext context) {
     final controller = ref.watch(appControllerProvider);
     final results = controller.memorySearchResults;
-    final memories = controller.memories;
-    final currentRows = {for (final m in [...memories, ...results]) m.id: m};
+    final allMemories = controller.memories;
+    final memories = browseMemories(allMemories, _browseCategory);
+    final currentRows = {for (final m in [...allMemories, ...results]) m.id: m};
     // Selection belongs to the exact rows the user reviewed. A consent or
     // remote revision change requires selecting again, not silent rebasing.
     if (_selectedRows.values.any((selected) {
@@ -3066,7 +3036,17 @@ class _MemoriesScreenState extends ConsumerState<MemoriesScreen> {
                     : tr(context, '${memories.length} 項',
                         '${memories.length} items')),
             const SizedBox(height: 9),
-            if (memories.isEmpty)
+            MemoryBrowseSelector(records: allMemories, selected: _browseCategory,
+              onChanged: (category) => setState(() {
+                _browseCategory = category;
+                _selectedRows.clear();
+              })),
+            const SizedBox(height: 9),
+            if (memories.isEmpty && allMemories.isNotEmpty)
+              EmptyCard(icon: Icons.filter_list,
+                message: tr(context, '這個類別尚未有分類項目。可改看全部或其他／未分類；沒有刪除任何記憶。',
+                  'No items are classified here. Choose All or Other / not classified; nothing was deleted.'))
+            else if (memories.isEmpty)
               EmptyCard(
                   icon: Icons.bookmark_border_rounded,
                   message: tr(
@@ -4989,13 +4969,36 @@ class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
   @override
   void initState() {
     super.initState();
-    Future<void>.microtask(() {
-      final controller = ref.read(appControllerProvider);
-      controller.refreshScamResources(silent: true);
-      controller.refreshVerifyActions(silent: true);
-      controller.refreshScamContacts(silent: true);
-      controller.refreshScamLogs(silent: true);
-    });
+    Future<void>.microtask(_loadGuidance);
+  }
+
+  Future<void> _loadGuidance() async {
+    if (!mounted) return;
+    final controller = ref.read(appControllerProvider);
+    await Future.wait([
+      controller.refreshScamResources(silent: true),
+      controller.refreshVerifyActions(silent: false),
+      controller.refreshScamContacts(silent: false),
+      controller.refreshScamLogs(),
+    ]);
+  }
+
+  Future<void> _callContact(ScamContact displayed) async {
+    final controller = ref.read(appControllerProvider);
+    final current = await controller.scamContactForCall(displayed);
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+    final uri = current?.dialUri;
+    if (uri == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context,
+          '電話資料未能確認，請查閱官方網站。', 'Number could not be confirmed. Check the official website.'))));
+      return;
+    }
+    var launched = false;
+    try { launched = await launchUrl(uri); } catch (_) { /* Show the manual fallback below. */ }
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context,
+          '無法開啟電話，請查閱官方網站。', 'Could not open the phone app. Check the official website.'))));
+    }
   }
 
   @override
@@ -5012,7 +5015,16 @@ class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
         children: [
-          Text(tr(context, '核實、暫停、保護', 'Verify, Pause, Protect'),
+          if (controller.errorMessage != null) ...[
+            ErrorBanner(message: controller.errorMessage!),
+            TextButton.icon(
+              onPressed: _loadGuidance,
+              icon: const Icon(Icons.refresh_rounded),
+              label: Text(tr(context, '重試', 'Retry')),
+            ),
+            const SizedBox(height: 14),
+          ],
+          Text(tr(context, '暫停、保護、核實', 'Pause, Protect, Verify'),
               style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 7),
           Text(tr(context, '遇到可疑電話或訊息時，記住三個步驟。安心伴不會代你報警或自動聯絡家人。',
@@ -5063,7 +5075,7 @@ class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
           ],
 
           // Verified contacts (FR SCM 03)
-          SectionTitle(title: tr(context, '已核實反詐騙聯絡', 'Verified contacts')),
+          SectionTitle(title: tr(context, '官方聯絡渠道', 'Official contact channels')),
           const SizedBox(height: 9),
           ...controller.scamContacts.map((contact) => Card(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -5078,23 +5090,35 @@ class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
                   title: Text(contact.name,
                       style: const TextStyle(
                           fontSize: 17, fontWeight: FontWeight.w700)),
-                  subtitle: contact.description != null
-                      ? Text(contact.description!)
-                      : null,
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (contact.description != null) Text(contact.description!),
+                      if (contact.verifiedAt != null) Text(tr(context,
+                          '最近核查：${contact.verifiedAt!.toIso8601String().substring(0, 10)}',
+                          'Last checked: ${contact.verifiedAt!.toIso8601String().substring(0, 10)}')),
+                      if (contact.expiresAt != null) Text(tr(context,
+                          '需再核查日期：${contact.expiresAt!.toIso8601String().substring(0, 10)}',
+                          'Recheck by: ${contact.expiresAt!.toIso8601String().substring(0, 10)}')),
+                      if (!contact.canCall) Text(tr(context, '電話暫不可用，請核對官方網站。',
+                          'Number unavailable. Check the official website.')),
+                      if (contact.officialUri != null) TextButton.icon(
+                        onPressed: () async {
+                          final opened = await launchUrl(contact.officialUri!);
+                          if (!opened && context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context,
+                                '無法開啟官方網站。', 'Could not open the official website.'))));
+                          }
+                        },
+                        icon: const Icon(Icons.open_in_new_rounded),
+                        label: Text(tr(context, '官方網站', 'Official website')),
+                      ),
+                    ],
+                  ),
                   trailing: FilledButton.icon(
-                    onPressed: () async {
-                      final launched = await launchUrl(Uri(
-                          scheme: 'tel',
-                          path: contact.phone.replaceAll(' ', '')));
-                      if (!launched && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(tr(context, '無法開啟電話。',
-                              'Could not open the phone app.')),
-                        ));
-                      }
-                    },
+                    onPressed: contact.canCall ? () => _callContact(contact) : null,
                     icon: const Icon(Icons.call_rounded),
-                    label: Text(contact.phone),
+                    label: Text(contact.canCall ? contact.phone : tr(context, '暫不可撥號', 'Call unavailable')),
                   ),
                 ),
               )),
@@ -5152,11 +5176,6 @@ class _ScamSafetyScreenState extends ConsumerState<ScamSafetyScreen> {
                   ),
                 )),
           ],
-
-          if (controller.errorMessage != null) ...[
-            const SizedBox(height: 14),
-            ErrorBanner(message: controller.errorMessage!),
-          ],
         ],
       ),
     );
@@ -5170,6 +5189,7 @@ class ScamResourceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sourceUri = ScamContact.officialSourceUri(resource.sourceUrl);
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -5280,28 +5300,21 @@ class ScamResourceCard extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 6,
                 children: resource.officialContacts
-                    .map((contact) => ActionChip(
+                    .map((contact) => Chip(
                           label: Text(contact),
-                          avatar: const Icon(Icons.phone_outlined, size: 18),
-                          onPressed: () async {
-                            final tel =
-                                contact.replaceAll(RegExp(r'[^0-9]'), '');
-                            if (tel.isNotEmpty) {
-                              await launchUrl(Uri(scheme: 'tel', path: tel));
-                            }
-                          },
+                          avatar: const Icon(Icons.info_outline_rounded, size: 18),
                         ))
                     .toList(),
               ),
             ],
-            if (resource.sourceUrl != null &&
-                resource.sourceUrl!.isNotEmpty) ...[
+            if (resource.officialContacts.isNotEmpty)
+              Text(tr(context, '如需已核查號碼，請使用上方「官方聯絡渠道」。',
+                  'For checked numbers, use Official contact channels above.')),
+            if (sourceUri != null) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: () async {
-                  final uri = Uri.tryParse(resource.sourceUrl!);
-                  if (uri == null ||
-                      !await launchUrl(uri,
+                  if (!await launchUrl(sourceUri,
                           mode: LaunchMode.externalApplication)) {
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

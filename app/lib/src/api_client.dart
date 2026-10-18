@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'http_deadline.dart';
 
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'models.dart';
+import 'content_simplification_api.dart';
+export 'content_simplification_api.dart';
 import 'answer_card_api.dart';
 import 'answer_card_export_api.dart';
 export 'answer_card_export_api.dart';
@@ -333,6 +336,7 @@ class RestApiClient
     implements
         AnxinApi,
         AnswerCardApi,
+        ContentSimplificationApi,
         AnswerCardExportApi,
         AnswerCardSharingApi,
         GuestApi,
@@ -1254,6 +1258,19 @@ class RestApiClient
 
   Uri _uri(String path) => Uri.parse('$origin/${path.replaceFirst('/', '')}');
 
+  @override
+  Future<SimplificationDraft> simplifyContent({required String original,
+      required String locale, required bool explicitlyRequested, String? guestSessionId}) async {
+    if (!explicitlyRequested || original.trim().isEmpty || original.length > 10000 ||
+        !const ['en', 'zh-Hant'].contains(locale)) {
+      throw const ContentSimplificationException('invalid_request');
+    }
+    final path=guestSessionId==null ? '/content/simplifications' :
+        '/guest/sessions/${Uri.encodeComponent(guestSessionId)}/simplifications';
+    final value=await _request('POST',path,body:{'text':original,'locale':locale,'explicit_request':true});
+    return SimplificationDraft.parse(value,original);
+  }
+
   Uri _liveUri(String groupId) {
     final uri = _uri('/groups/${Uri.encodeComponent(groupId)}/live');
     final scheme = switch (uri.scheme) {
@@ -1286,20 +1303,13 @@ class RestApiClient
     final uri = _uri(path);
     try {
       final encodedBody = body == null ? null : jsonEncode(body);
-      final response = await _client
-          .send(
-            http.Request(method, uri)
-              ..headers.addAll(_headers(jsonBody: body != null))
-              ..headers.addAll({
-                if (idempotencyKey != null && idempotencyKey.isNotEmpty)
-                  'Idempotency-Key': idempotencyKey,
-                if (memoryRevision != null)
-                  'X-Memory-Revision': memoryRevision.toString(),
-              })
-              ..body = encodedBody ?? '',
-          )
-          .timeout(_requestTimeout);
-      final text = await response.stream.bytesToString();
+      final response = await requestWithinDeadline(_client, method, uri,
+          headers: {..._headers(jsonBody: body != null),
+            if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+              'Idempotency-Key': idempotencyKey,
+            if (memoryRevision != null) 'X-Memory-Revision': memoryRevision.toString()},
+          body: encodedBody ?? '', timeout: _requestTimeout);
+      final text = utf8.decode(response.bodyBytes);
       Object? decoded;
       if (text.trim().isNotEmpty) {
         try {

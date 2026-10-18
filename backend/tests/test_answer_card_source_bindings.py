@@ -20,7 +20,7 @@ def chat_answer(client, owner, content='Explain medical fee waiver'):
 
 
 @pytest.mark.parametrize('record_id', ['swd-elderly-health-centre-2026', 'mtr-journey-planner',
-    'transport-rehabus-2026', 'transport-bus-info-2026', 'dh-health-hotline-2026', 'ha-gopc-registration-2026'])
+    'transport-bus-info-2026', 'dh-health-hotline-2026', 'ha-gopc-registration-2026'])
 def test_production_manifest_hosts_and_exact_ha_query_are_carried(setup, record_id):
     _, client, (owner, _, _) = setup
     record = next(r for r in get_default_resource_service().records if r.id == record_id)

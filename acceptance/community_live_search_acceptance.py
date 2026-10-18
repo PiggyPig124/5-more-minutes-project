@@ -5,20 +5,19 @@ from memory_revision_helpers import memory_revision_headers
 import argparse
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from fastapi.testclient import TestClient
-from app.config import Settings
-from app.main import create_app
+from _bounded_acceptance import supervise
+from echo_mvp_phase1_acceptance import assert_activity_catalog, assert_disabled_opportunities
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="Fetch the configured public community pages")
-    if not parser.parse_args().live:
-        parser.error("--live is required; this test contacts the configured public providers")
+def run_live() -> None:
+    from fastapi.testclient import TestClient
+    from app.config import Settings
+    from app.main import create_app
     count = 0
 
     def check(ok: bool, label: str) -> None:
@@ -34,10 +33,11 @@ def main() -> None:
             response = client.get("/community/activities")
             check(response.status_code == 200, "public activity endpoint responds")
             first = response.json()
-            check(first["search_state"] == "live" and bool(first["items"]), "activities retrieved from a real provider")
-            check(all(row["source_url"].startswith("https://") and row["last_checked_at"] and row["event_end_at"] and row["verified"] is False for row in first["items"]), "results preserve dates and do not guarantee availability")
+            assert_activity_catalog(first,expected_state='live',require_items=False)
+            check(True, "official snapshot fetched and parsed; current inventory may honestly be empty")
             cached = client.get("/community/activities").json()
-            check(cached["search_state"] == "cache" and cached["checked_at"] == first["checked_at"], "cached response retains original retrieval time")
+            assert_activity_catalog(cached,expected_state='cache',expected_checked_at=first['checked_at'],require_items=False)
+            check(True, "cached response retains original retrieval time and source boundaries")
             auth = client.post("/auth/register", json={"email": "community-live@example.invalid", "password": "Synthetic-live-test-2026!", "display_name": "Synthetic elder", "role": "elder"}).json()
             headers = {"Authorization": f"Bearer {auth['access_token']}"}
             client.put("/memories/consent", headers=memory_revision_headers(client, headers), json={"enabled": True})
@@ -48,7 +48,8 @@ def main() -> None:
             result = client.get("/community/opportunities", headers=headers, params={"skill_id": skill["id"]})
             check(result.status_code == 200, "confirmed skill invokes opportunity retrieval")
             opportunities = result.json()
-            check(opportunities["search_state"] == "live" and all(row["listing_type"] == "opportunity" for row in opportunities["items"]), "volunteer source reached without relabeling classes")
+            assert_disabled_opportunities(opportunities)
+            check(True, "unapproved opportunity providers remain explicitly disabled; activities are not relabeled")
             session = client.post("/guest/sessions").json()
             reply = client.post(f"/guest/sessions/{session['session_id']}/messages", json={"content": "Please search community activities."})
             check(reply.status_code == 200 and bool(reply.json().get("community_sources")), "guest conversation invokes search with public citations")
@@ -59,5 +60,15 @@ def main() -> None:
     print(f"Community live acceptance: {count} passed, 0 failed")
 
 
+def main() -> int:
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--live',action='store_true',help='Contact the fixed official SmartPLAY public endpoint')
+    parser.add_argument('--worker',action='store_true',help=argparse.SUPPRESS)
+    parser.add_argument('--report',type=Path,default=Path(tempfile.gettempdir())/f'echo-community-live-{uuid.uuid4().hex}.json')
+    args=parser.parse_args()
+    if not args.live:parser.error('--live is required; this test contacts the official public provider')
+    if args.worker:run_live();return 0
+    return supervise(Path(__file__),['--live','--worker'],timeout_seconds=90,report_path=args.report)
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
